@@ -30,7 +30,7 @@ const Q = (it, k, d = 0) => (it && it.q && it.q[k] != null ? it.q[k] : d);
 R({ id: 'knap_flakes', name: 'Knap flakes', group: 'Stone', time: 20,
   desc: 'Strike sharp flakes off a core. The stone decides how well this goes.',
   tools: [{ cap: 'pound', min: 35 }, { cap: 'billet', min: 30, opt: true }],
-  in: [{ id: 'core', kind: 'toolstone', n: 1, prefer: 'knappability' }],
+  in: [{ id: 'core', kind: 'toolstone', n: 0.4, prefer: 'knappability' }],
   risk: [{ type: 'cut', p: 0.07, sev: [5, 25] }],
   fail: (c) => (100 - Q(c.ins.core, 'knappability')) / 170, failMsg: 'The core crumbles along hidden flaws. Nothing usable.',
   make: (c) => {
@@ -48,7 +48,7 @@ R({ id: 'knap_biface', name: 'Knap a hand axe', group: 'Stone', time: 50,
 R({ id: 'knap_point', name: 'Knap a spear point', group: 'Stone', time: 40,
   desc: 'A thin symmetrical point. Demands good stone; an antler tool helps.',
   tools: [{ cap: 'pound', min: 35 }, { cap: 'billet', min: 30, opt: true }],
-  in: [{ id: 'core', kind: 'toolstone', n: 1, q: { knappability: 45 }, prefer: 'knappability' }],
+  in: [{ id: 'core', kind: 'toolstone', n: 0.5, q: { knappability: 45 }, prefer: 'knappability' }],
   risk: [{ type: 'cut', p: 0.1, sev: [5, 25] }],
   fail: (c) => (100 - Q(c.ins.core, 'knappability')) / 120 - (c.lvl('billet') >= 30 ? 0.15 : 0), failMsg: 'The point snaps across the middle as you thin it.',
   make: (c) => { const kn = Q(c.ins.core, 'knappability'); c.give('point', 1, { sharpness: 40 + 0.5 * kn + (c.lvl('billet') >= 30 ? 8 : 0) }); c.give('flake', 1, { sharpness: 30 + 0.5 * kn }); } });

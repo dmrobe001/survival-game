@@ -73,6 +73,32 @@ The web lays actions out by total time (columns) and kind of work (rows).
 Goals mark every step on their route; the steps you can do now are listed at
 the top.
 
+## The main screen
+
+Top to bottom: the reserve that runs out first, projects, tasks you can do
+now, what is on the ground, and your two hands.
+
+- **Projects** are recipes plus eating, drinking and sleeping; collecting
+  and travel are tasks, not projects. Unselected, they sort by estimated
+  time to finish. With a one-off project selected, the others sort by
+  *saving*: the minutes of the selected project's planned route that their
+  own route covers. This is exact under the plan but blind to shortcuts the
+  plan did not take. With a repeating need selected (eat, drink, sleep, feed
+  the fire), they sort by how much what they make would raise that rate
+  (kcal per hour of foraging, how restful sleep is, water purity, hours of
+  fire per hour of wood-gathering), holding everything else fixed.
+- **Tasks** are only what one tap can do now. Steps on the selected
+  project's route come first, in route order.
+- **The status bar** shows each reserve's time to empty at the metabolic
+  rate of the top task: food, water, stamina, warmth, and the fire if one
+  is burning. The soonest is shown; tap for all.
+- **Hands.** What you collect or make lands in a hand (or a container you
+  hold or wear that fits it). The remainder of something you worked from,
+  such as a knapped core, is set down. Tools just used are never displaced;
+  otherwise the thing held longest is set down. Only one hand's worth is
+  picked up per action. Toolstone is now a lump measured in kilograms that
+  knapping wears down.
+
 ## Time
 
 Every action calls `advance(minutes, met, mode)`, which steps in 15-minute

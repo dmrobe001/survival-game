@@ -95,7 +95,7 @@ export function capOf(it, cap) {
   const c = k.cont && contSpec(it);
   if (c) {
     if (cap === 'vessel' && c.liquid) return (c.vol * c.ret) / 100;      // litres it can usefully hold
-    if (cap === 'bag' && !c.liquid && c.mesh <= 1) return c.vol;        // litres of loose small stuff
+    if (cap === 'bag' && !c.liquid && c.mesh <= 1 && !k.fixed) return Math.min(c.vol, 30); // litres of loose small stuff you can carry while picking
   }
   return 0;
 }
@@ -113,7 +113,7 @@ const TOL = 12; // qualities closer than this merge into one stack
 export function canMerge(a, b) {
   const k = kindOf(a);
   if (a.kind !== b.kind || a === b) return false;
-  if (k.slots || k.cont || k.fixed || a.proc || b.proc || a.parts || b.parts) return false;
+  if (k.lump || k.slots || k.cont || k.fixed || a.proc || b.proc || a.parts || b.parts) return false;
   for (const key in a.q) if (Math.abs(a.q[key] - (b.q[key] ?? 0)) > TOL) return false;
   return true;
 }
@@ -126,6 +126,8 @@ export function addTo(list, it) {
       const tot = o.n + it.n;
       for (const key in o.q) o.q[key] = Math.round(((o.q[key] * o.n + (it.q[key] ?? 0) * it.n) / tot) * 10) / 10;
       o.n = tot;
+      list.splice(list.indexOf(o), 1); // a topped-up stack counts as the newest thing in the list
+      list.push(o);
       return o;
     }
   }

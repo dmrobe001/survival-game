@@ -95,8 +95,8 @@ R('large_game', { name: 'Large game sign', habitat: (e) => 0.15 + 0.45 * e.canop
 R('cobbles', { name: 'Cobbles', habitat: (e) => Math.max(e.rock, 0.8 * ramp(e.water, 0.5, 0.8)), cap: 200, keyQ: 'hardness',
   q: { hardness: [60, 14], thermal: (e) => [72 - 40 * e.water, 12] }, gather: { kind: 'cobble', rate: 15, met: 3 },
   note: 'Hammerstones, cooking stones, hearth rings. Water-worn stones tend to crack when heated.' });
-R('toolstone', { name: 'Knappable stone', habitat: (e) => Math.max(e.flint, 0.45 * e.rock), cap: 40, vis: 0.5, keyQ: 'knappability',
-  q: { knappability: (e) => [28 + 55 * e.flint, 10] }, gather: { kind: 'toolstone', rate: 3, met: 3 },
+R('toolstone', { name: 'Knappable stone', habitat: (e) => Math.max(e.flint, 0.45 * e.rock), cap: 50, vis: 0.5, keyQ: 'knappability',
+  q: { knappability: (e) => [28 + 55 * e.flint, 10] }, gather: { kind: 'toolstone', rate: 3.5, met: 3 },
   note: 'Anything that breaks with a shell-shaped fracture. Quality varies enormously from place to place.' });
 R('slabs', { name: 'Flat slabs', habitat: (e) => e.rock, cap: 15, vis: 0.8,
   q: { hardness: [60, 14] }, gather: { kind: 'slab', rate: 2, met: 4 } });

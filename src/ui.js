@@ -11,10 +11,11 @@ import { hourOf, dayOf, airTemp, feltTemp, isDark, sleepQuality } from './sim.js
 import { newGame, act, gatherStatus, recipeStatus, planInput, slotSpec, waterHere, trapsHere, travelInfo, MAX_CARRY } from './actions.js';
 import { dist, bearing } from './world.js';
 import { makePlanner } from './plan.js';
+import { REPEAT, projectList, rankProjects, taskList, runway, flowText, gainText, flowNow } from './advice.js';
 
 const SAVE_KEY = 'foothold-save-v1';
 let S = null;
-const ui = { tab: 'plan', sel: null, planFilter: 'all', edges: [], view: null, choices: {}, targets: {}, hours: 2, notice: '', busy: false, fast: false, confirmNew: false };
+const ui = { overlay: null, menu: false, inv: false, vitals: false, collapsed: {}, projBack: [], tab: 'plan', sel: null, planFilter: 'all', edges: [], view: null, choices: {}, targets: {}, hours: 2, notice: '', busy: false, fast: false, confirmNew: false };
 
 // ------------------------------------------------------------------ persistence
 // JSON cannot hold Infinity; water sources have infinite abundance.
@@ -264,7 +265,7 @@ function detail(P, n) {
   const chain = n.steps.length > 1 ? `<div class="chain"><span class="muted small">Route:</span>${n.steps.map((st) => { const m = P.node(st.key); return `<button class="node ${m.ready ? 'ready' : ''} ${st.key === n.key ? 'sel' : ''}" data-ui="sel:${st.key}">${esc(stepLabel(m))}${st.times > 1 ? ' ×' + st.times : ''} <small>${fmtTime(st.minutes + st.wait)}${st.wait ? ' incl. waiting' : ''}</small></button>`; }).join('<span class="chev">›</span>')}</div>` : '';
   const head = n.ready ? (n.passive ? 'Here' : 'Ready now') : isFinite(n.total) ? `About ${fmtTime(n.total)} away, ${n.away} step${n.away === 1 ? '' : 's'} first` : 'No known route right now';
   return `<section class="detail" id="detail"><div class="recipe-head"><div><span class="item-name">${esc(n.name)}</span> <span class="chip ${n.ready ? 'cap' : 'warm'}">${head}</span></div>
-    <div class="ctrl">${goalBox(n)}${act1}${uibtn('Close', 'sel:', { cls: 'quiet' })}</div></div>${body}${chain}</section>`;
+    <div class="ctrl">${goalBox(n)}${uibtn('Make it my project', 'proj:' + n.key)}${act1}${uibtn('Close', 'sel:', { cls: 'quiet' })}</div></div>${body}${chain}</section>`;
 }
 
 function planTab() {
@@ -363,7 +364,9 @@ function guideTab() {
     <p><b>Made things have parts.</b> An axe is a head, a haft, a binding and maybe glue, each wearing out in its own way. When a part fails the tool stops working until you fit a replacement from its entry in a list.</p>
     <p><b>A place only has what it has.</b> What you take grows back slowly or not at all. Search a place to find what is hidden; explore to find better country.</p>
     <p><b>You carry two hands' worth.</b> Baskets, bags, frames and a travois extend that, and can be nested. A net will not hold berries, but it will hold a bag of them.</p>
-    <p><b>The Plan tab is a map of what is possible.</b> Further right means further off. Pick an action to see its requirements and the quickest route you know of; click an unmet requirement to jump to whatever supplies it. Tick Goal on what you are after and the steps toward it are marked.</p>
+    <p><b>The main screen is what you are up to.</b> Pick a project and the list beneath it reorders around it: other projects by how much of its route they would cover, tasks by what moves it forward now. For eating, sleeping, drinking and keeping a fire, projects are ranked by how much they would raise that rate. The bar at the top is whichever reserve runs out first if you kept doing the top task.</p>
+    <p><b>Your hands are at the bottom.</b> What you collect or make lands in your hand, setting down whatever you have held longest. Tap something on the ground to pick up a handful; tap something in your hand to set it down. Inventory shows every container here with full detail; drag the handle to move things between them.</p>
+    <p><b>The technique web</b> (from the menu) lays every action out by how far off it is. Click an unmet requirement to jump to whatever supplies it.</p>
     <p><b>First day:</b> find water, pick up cobbles, look for stone that flakes, cut a sapling, twist cord, and get a fire and a bed together before dark.</p></section>
     <section><h3>This world</h3><p>Seed <code>${esc(S.seed)}</code>. The same seed always grows the same country.</p>
     <div class="ctrl left wrap"><input id="seed-input" type="text" maxlength="24" placeholder="seed for a new world" aria-label="Seed for a new world">
@@ -372,29 +375,206 @@ function guideTab() {
     <p class="muted small">Progress is kept in this browser only.</p></section>`;
 }
 
-// ------------------------------------------------------------------ log and frame
+// ------------------------------------------------------------------ journal
 function logView() {
-  const rows = S.log.slice(-60).reverse().map((l, i) => `<li class="${l.cls} ${i < ui.fresh ? 'fresh' : ''}"><time>d${Math.floor(l.t / 1440) + 1} ${clock(l.t)}</time> ${esc(l.msg)}</li>`).join('');
-  return `<aside class="log" aria-label="What has happened"><h3>Journal</h3><ol>${rows}</ol></aside>`;
+  const rows = S.log.slice(-80).reverse().map((l, i) => `<li class="${l.cls} ${i < ui.fresh ? 'fresh' : ''}"><time>d${Math.floor(l.t / 1440) + 1} ${clock(l.t)}</time> ${esc(l.msg)}</li>`).join('');
+  return `<section class="log"><ol>${rows}</ol></section>`;
+}
+
+// ------------------------------------------------------------------ main screen
+const VITAL_CLS = (l) => (l.h < 2 ? 'bad' : l.h < 6 ? 'warn' : '');
+function statusBar(lines, top) {
+  const soon = lines[0];
+  const sky = { clear: isDark(S) ? 'clear night' : 'clear', cloudy: 'overcast', rain: 'rain', storm: 'storm' }[S.weather.kind];
+  const conds = S.c.cond.map((x) => chip(`${{ cut: 'cut hand', blister: 'blisters', sprain: 'sprained ankle', bruise: 'bruised', gastro: 'sick gut', burn: 'burn' }[x.type]} ${Math.round(x.sev)}`, 'low')).join('');
+  const all = ui.vitals ? `<div class="vitals-all">${lines.map((l) => `<div class="vline ${VITAL_CLS(l)}"><span>${l.name}</span><div class="track"><i style="width:${Math.round(clamp(l.frac, 0, 1) * 100)}%"></i></div><span>${l.h > 99 ? 'days' : '~' + fmtTime(l.h * 60)} ${l.word}</span></div>`).join('')}
+      <div class="vline ${S.c.health < 50 ? 'bad' : ''}"><span>Health</span><div class="track"><i style="width:${Math.round(S.c.health)}%"></i></div><span>${Math.round(S.c.health)}%</span></div>
+      <div class="vline"><span>Reserves</span><div class="track"><i style="width:${Math.round(clamp(S.c.fat / 60000, 0, 1) * 100)}%"></i></div><span>${Math.round(S.c.fat / 2400)} days of fat</span></div>
+      <p class="muted small">At the pace of: ${esc(top ? top.name.toLowerCase() : 'what you are doing')}.</p></div>` : '';
+  return `<header class="sbar">
+    <button class="soon ${VITAL_CLS(soon)}" data-ui="vitals" aria-expanded="${ui.vitals}">
+      <span class="soon-top"><b>${soon.name}</b><span>${soon.h > 99 ? 'fine for days' : `~${fmtTime(soon.h * 60)} ${soon.word}`}</span></span>
+      <span class="track"><i style="width:${Math.round(clamp(soon.frac, 0, 1) * 100)}%"></i></span></button>
+    <div class="sbar-right"><span class="when">D${dayOf(S)} ${clock(S.t)}<br>${sky} ${Math.round(airTemp(S))}°</span>${uibtn('☰', 'menu', { cls: 'menu-btn', on: ui.menu })}</div>
+    ${conds ? `<div class="chips conds">${conds}</div>` : ''}${all}
+    ${ui.menu ? `<nav class="menu">${[['body', 'Body'], ['web', 'Technique web'], ['places', 'Places and exploring'], ['journal', 'Journal'], ['guide', 'Guide and new game']].map(([k, n]) => uibtn(n, 'overlay:' + k)).join('')}</nav>` : ''}
+  </header>
+  <div class="progress" id="progress" hidden><i></i></div>
+  ${ui.notice ? `<p class="notice" role="status">${esc(ui.notice)}</p>` : `<button class="lastlog ${S.log.length && S.log[S.log.length - 1].cls}" data-ui="overlay:journal">${esc(S.log.length ? S.log[S.log.length - 1].msg : '')}</button>`}`;
+}
+
+const projMeta = (n) => (n.repeat ? (n.ready ? 'now' : 'not now') : n.prog ? `in progress, ${fmtTime(n.total)} left` : n.ready ? (n.repeat ? 'now' : 'ready · ' + fmtTime(n.total)) : isFinite(n.total) ? `~${fmtTime(n.total)} · ${n.away} step${n.away === 1 ? '' : 's'}` : 'no known route');
+
+function selectedCard(P, rk) {
+  const n = rk.sel;
+  let lines = '', doBtn = '';
+  if (n.repeat) {
+    const now = rk.base;
+    lines = `<p class="small">${esc(n.why)}. Now: ${flowText(rk.flow, now)}${rk.how ? ', best by ' + esc(rk.how) : ''}.</p><p class="muted small">Projects below are ranked by how much they would raise that.</p>`;
+    if (n.cmd) doBtn = btn(n.name, n.cmd, { off: !n.ready, cls: 'primary' });
+  } else if (n.recipe) {
+    const r = n.recipe, st = recipeStatus(S, r, ui.choices[r.id] || {});
+    lines = '<ul class="reqs">' + st.lines.filter((l) => !l.opt || l.ok).map((l) => {
+      const via = l.ok ? null : l.input ? n.reqs.in[l.input] : l.cap ? n.reqs.tool[l.cap] : l.res ? n.reqs.res : null;
+      const vn = via ? P.node(via) : null;
+      const link = vn ? (vn.recipe ? ` <button class="link" data-ui="proj+:${via}">› ${esc(vn.name)}</button>` : ` <span class="muted">› ${esc(vn.name.toLowerCase())}</span>`) : '';
+      return `<li class="req ${l.ok ? 'ok' : 'no'}">${esc(l.text)}${link}</li>`;
+    }).join('') + '</ul>';
+    if (n.prog) doBtn = btn(`Keep working (${fmtTime(Math.min(120, n.prog.proj.left))})`, { t: 'work', id: n.prog.id }, { cls: 'primary' });
+    else doBtn = btn(st.time > 150 && !r.outdoor ? `Start (${fmtTime(st.time)})` : `Do it · ${fmtTime(st.time)}`, { t: 'recipe', id: r.id, choose: ui.choices[r.id] || {} }, { off: !st.ok, cls: 'primary' });
+    lines = lines + `<p class="muted small">${esc(r.desc || '')}</p>`;
+  }
+  const back = ui.projBack.length ? uibtn('‹ ' + esc(P.has(ui.projBack[ui.projBack.length - 1]) ? P.node(ui.projBack[ui.projBack.length - 1]).name : REPEAT[ui.projBack[ui.projBack.length - 1]].name), 'projBack', { cls: 'quiet small-btn' }) : '';
+  return `<div class="selcard"><div class="selhead">${back}<span class="item-name">${esc(n.name)}</span><span class="chip ${n.ready ? 'cap' : 'warm'}">${projMeta(n)}</span>
+    <span class="selbtns">${doBtn}${uibtn('×', 'projClear', { cls: 'quiet small-btn' })}</span></div>${lines}</div>`;
+}
+
+function projectsPane(P, rk) {
+  const rows = rk.rest.map((n) => {
+    let meta = projMeta(n), cls = n.ready ? 'ready' : '';
+    if (rk.sel && rk.flow) { if (n.gain > 1e-6) { meta = gainText(rk.flow, n.gain) + ' · ' + meta; cls += ' helps'; } else cls += ' dim'; }
+    else if (rk.sel) { if (n.saved > 0) { meta = `saves ~${fmtTime(n.saved)} · ` + meta; cls += ' helps'; } else cls += ' dim'; }
+    if (!isFinite(n.total)) cls += ' dim';
+    return `<li><button class="row ${cls}" data-ui="proj:${n.key}"><span class="row-name">${esc(n.name)}</span><span class="row-meta">${meta}</span></button></li>`;
+  }).join('');
+  return `<section class="pane projects" aria-label="Projects">
+    ${rk.sel ? selectedCard(P, rk) : '<h2 class="pane-h">Projects <small>by time to finish</small></h2>'}
+    <ul class="rows" id="proj-list" data-keep-scroll>${rows}</ul></section>`;
+}
+
+function tasksPane(tasks) {
+  const rows = tasks.map((t, i) => `<li><button class="row task ${t.front ? 'front' : ''} ${i === 0 ? 'first' : ''}" data-cmd="${esc(JSON.stringify(t.cmd))}">
+      <span class="row-name">${esc(t.name)}${t.why ? `<small>${esc(t.why)}</small>` : ''}</span><span class="row-meta">${t.note ? esc(t.note) + ' · ' : ''}${fmtTime(t.minutes)}</span></button></li>`).join('');
+  return `<section class="pane tasks" aria-label="Tasks"><h2 class="pane-h">Do now <small>${esc(here(S).name)}</small></h2><ul class="rows" id="task-list" data-keep-scroll>${rows}</ul></section>`;
+}
+
+function builtChip(it) {
+  const k = kindOf(it);
+  if (it.kind === 'fire') return chip(`fire ${fmt(it.q.fuel)} h`, 'warm');
+  if (it.kind === 'embers') return chip(`embers ${fmt(it.q.heat)} h`, 'warm');
+  if (it.proj) return chip(`unfinished ${it.proj.name}`, 'warm');
+  if (k.trap) return chip(itemName(it) + ((it.in || []).length ? ' (something in it?)' : ''), '');
+  if (it.proc) return chip(`${itemName(it)}, ready in ${fmtTime(it.proc.left)}`, 'warm');
+  const miss = missingSlots(it);
+  return chip(itemName(it), miss.length ? 'low' : '');
+}
+
+function stashPane() {
+  const L = here(S);
+  const loose = L.items.filter((it) => !kindOf(it).fixed && !it.proc).slice().reverse();
+  const built = L.items.filter((it) => kindOf(it).fixed || it.proc);
+  return `<section class="pane stash" aria-label="On the ground"><div class="pane-h"><h2>On the ground</h2>${uibtn('Inventory', 'inv', { cls: 'small-btn' })}</div>
+    ${built.length ? `<div class="chips built">${built.map(builtChip).join('')}</div>` : ''}
+    <div class="ground" id="ground" data-keep-scroll>${loose.length ? loose.map((it) => `<button class="gitem" data-cmd="${esc(JSON.stringify({ t: 'grab', id: it.id }))}">${esc(itemName(it))} <b>${amountText(it)}</b></button>`).join('') : '<span class="muted small">Nothing here yet.</span>'}</div></section>`;
+}
+
+function handStats(it) {
+  const out = [];
+  const caps = capsOf(it);
+  Object.keys(caps).sort((a, b) => caps[b] - caps[a]).slice(0, 2).forEach((c) => out.push(`${CAP_NAMES[c] || c} ${caps[c]}`));
+  const c = contSpec(it);
+  if (c) out.push((it.in || []).length ? it.in.map((x) => `${kindOf(x).name} ${amountText(x)}`).join(', ') : `empty, holds ${fmt(c.vol)} L`);
+  if (!out.length) for (const q of Q_ORDER) {
+    if (it.q[q] == null || out.length >= 2) continue;
+    if ((q === 'integrity' || q === 'fresh') && it.q[q] > 50) continue;
+    if (q === 'smoked' || q === 'size' || q === 'retention') continue;
+    out.push(`${q} ${Math.round(it.q[q])}`);
+  }
+  const m = massOf(it);
+  if (kindOf(it).unit === 'ea' && m >= 0.3) out.push(`${fmt(m)} kg`);
+  return out;
+}
+
+function handsBar() {
+  const slots = [];
+  for (const it of S.c.hands) { const h = handsFor(it); slots.push({ it, w: h }); }
+  let html = '', used = 0;
+  for (const { it, w } of slots) {
+    used += w;
+    html += `<button class="hand ${w === 2 ? 'both' : ''}" data-cmd="${esc(JSON.stringify({ t: 'move', id: it.id, to: 'ground' }))}" title="Set it down">
+      <span class="hand-name">${esc(itemName(it))} <b>${amountText(it)}</b></span><span class="hand-stats">${handStats(it).map(esc).join(' · ')}</span></button>`;
+  }
+  for (; used < 2; used++) html += `<div class="hand empty"><span class="muted small">${used === 0 && !slots.length ? 'left' : 'right'} hand empty</span></div>`;
+  const worn = S.c.worn.length ? `<div class="worn small muted">wearing ${S.c.worn.map((it) => esc(itemName(it))).join(', ')}</div>` : '';
+  return `<footer class="hands" data-drop="hands">${html}${worn}</footer>`;
+}
+
+// ------------------------------------------------------------------ inventory
+function invRow(it) {
+  const k = kindOf(it);
+  let extra = '';
+  if (it.proc) extra += chip(`ready in ${fmtTime(it.proc.left)}`, 'warm');
+  if (it.proj) extra += chip(`${Math.round(100 * (1 - it.proj.left / it.proj.total))}% done`, 'warm');
+  let parts = '';
+  if (k.slots) for (const sl in k.slots) {
+    const p = it.parts && it.parts[sl], spec = slotSpec(it, sl);
+    const opts = planInput(S, spec, null).cands.filter((c) => planInput(S, spec, c.id).ok);
+    const sel = opts.length ? `<select data-replace="${it.id}:${sl}" aria-label="Replace ${esc(sl)}"><option value="">${p ? 'Replace…' : 'Fit…'}</option>${opts.map((o) => `<option value="${o.id}">${esc(itemName(o))} ${amountText(o)} ${briefQ(o)}</option>`).join('')}</select>` : '';
+    parts += `<div class="part"><i>${esc(sl)}:</i> ${p ? `${esc(itemName(p))} ${amountText(p)} <span class="chips">${qualChips(p)}</span>` : `<span class="${spec.opt ? 'muted' : 'bad'}">${spec.opt ? 'none' : 'missing'}</span>`} ${sel}</div>`;
+  }
+  const c = contSpec(it);
+  const fill = c && c.liquid && waterHere(S) && !k.fixed ? btn('Fill', { t: 'fill', id: it.id }, { cls: 'small-btn' }) : '';
+  const apart = it.proj || k.slots || k.unset ? btn(it.proj ? 'Abandon' : 'Take apart', { t: 'dismantle', id: it.id }, { cls: 'quiet small-btn' }) : '';
+  const wear = k.worn && !S.c.worn.includes(it) ? btn(k.cont ? 'Sling on' : 'Wear', { t: 'move', id: it.id, to: 'wear' }, { cls: 'small-btn' }) : '';
+  const handle = k.fixed ? '<span class="handle off"></span>' : `<span class="handle" data-drag="${it.id}" aria-label="Drag ${esc(k.name)}">⠿</span>`;
+  return `<li class="inv-item">${handle}<div class="inv-main"><span class="item-name">${esc(itemName(it))} <b>${amountText(it)}</b></span>
+    <span class="chips">${capChips(it)}${contText(it)}${k.trap ? '' : qualChips(it)}${extra}</span>${parts}${fill || apart || wear ? `<div class="ctrl left">${wear}${fill}${apart}</div>` : ''}</div></li>`;
+}
+function invPanel(id, title, sub, list, drop) {
+  const shut = ui.collapsed[id];
+  return `<section class="inv-panel" data-drop="${drop}"><button class="inv-h" data-ui="collapse:${id}" aria-expanded="${!shut}"><span>${shut ? '▸' : '▾'} ${esc(title)}</span><span class="muted small">${sub}</span></button>
+    ${shut ? '' : list.length ? `<ul>${list.map(invRow).join('')}</ul>` : '<p class="muted small empty-drop">Empty. Drag something here.</p>'}</section>`;
+}
+function inventoryPane() {
+  const L = here(S);
+  const panels = [invPanel('ground', 'Ground: ' + L.name, `${L.items.length} thing${L.items.length === 1 ? '' : 's'}`, L.items, 'ground'), invPanel('worn', 'Worn', S.c.worn.length ? '' : 'nothing', S.c.worn, 'wear')];
+  for (const { it } of reach(S)) {
+    const c = contSpec(it);
+    if (!c || kindOf(it).trap) continue;
+    panels.push(invPanel('c' + it.id, itemName(it), `${fmt(usedVol(it))} of ${fmt(c.vol)} L${c.liquid ? `, ${Math.round(c.ret)}% watertight` : c.mesh >= 1 ? `, gaps ${c.mesh} cm` : ''}`, it.in || [], it.id));
+  }
+  panels.push(invPanel('hands', 'In your hands', `${handsUsed(S)} of 2 hands · ${fmt(carriedMass(S))} of ${MAX_CARRY} kg carried`, S.c.hands, 'hands'));
+  return `<section class="pane inventory" id="inv" data-keep-scroll><div class="pane-h"><h2>Inventory</h2>${uibtn('Done', 'inv', { cls: 'primary small-btn' })}</div>
+    <p class="muted small">Drag the ⠿ handle onto a panel, or onto your hands below, to move as much as fits.</p>${panels.join('')}</section>`;
+}
+
+// ------------------------------------------------------------------ overlays (the older full views)
+function overlay() {
+  const O = { body: ['Body', () => header() + selfTab()], web: ['Technique web', planTab], places: ['Places and exploring', placeTab], journal: ['Journal', logView], guide: ['Guide', guideTab] }[ui.overlay];
+  return `<div class="overlay ${ui.overlay}"><div class="ov-h"><h2>${O[0]}</h2>${uibtn('Close', 'overlay:', { cls: 'primary' })}</div><div class="ov-body">${O[1]()}</div></div>`;
 }
 
 function render() {
   const app = document.getElementById('app');
-  const TABS = { plan: ['Plan', planTab], place: ['Places', placeTab], self: ['Self', selfTab], guide: ['Guide', guideTab] };
-  let main;
-  if (S.dead) {
-    main = `<section class="dead"><h2>You lasted ${dayOf(S) - 1} days.</h2><p>${{ thirst: 'Thirst', starvation: 'Starvation', exposure: 'Cold', injury: 'Injury and sickness' }[S.dead.cause]} ended it at ${esc(here(S).name.toLowerCase())}.</p>
-      <div class="ctrl left">${uibtn('Wake again in a new world', 'new!', { cls: 'primary' })}${uibtn('Same world, from the start', 'again', {})}</div></section>`;
-  } else {
-    main = `<nav class="tabs" aria-label="Sections">${Object.keys(TABS).map((t) => uibtn(TABS[t][0], 'tab:' + t, { on: ui.tab === t })).join('')}</nav><div class="panel">${TABS[ui.tab][1]()}</div>`;
-  }
+  const keep = {};
+  document.querySelectorAll('[data-keep-scroll]').forEach((el) => { keep[el.id] = el.scrollTop; });
   const y = window.scrollY, wrap = document.getElementById('webwrap'), x = wrap ? wrap.scrollLeft : 0;
-  app.innerHTML = `${header()}<div class="cols"><main>${main}</main>${logView()}</div>`;
-  const wrap2 = document.getElementById('webwrap');
-  if (wrap2) wrap2.scrollLeft = x;
-  window.scrollTo(0, y);
-  drawEdges();
-  if (ui.reveal) { ui.reveal = false; const d = document.getElementById('detail'); if (d) d.scrollIntoView({ block: 'nearest' }); }
+  if (S.dead) {
+    app.innerHTML = `<section class="dead"><h2>You lasted ${dayOf(S) - 1} days.</h2><p>${{ thirst: 'Thirst', starvation: 'Starvation', exposure: 'Cold', injury: 'Injury and sickness' }[S.dead.cause]} ended it at ${esc(here(S).name.toLowerCase())}.</p>
+      <div class="ctrl left">${uibtn('Wake again in a new world', 'new!', { cls: 'primary' })}${uibtn('Same world, from the start', 'again', {})}${uibtn('Read the journal', 'overlay:journal')}</div></section>${ui.overlay ? overlay() : ''}`;
+    return;
+  }
+  if (ui.overlay) {
+    app.innerHTML = overlay();
+    const wrap2 = document.getElementById('webwrap');
+    if (wrap2) wrap2.scrollLeft = x;
+    window.scrollTo(0, y);
+    drawEdges();
+    if (ui.reveal) { ui.reveal = false; const d = document.getElementById('detail'); if (d) d.scrollIntoView({ block: 'nearest' }); }
+    return;
+  }
+  const P = makePlanner(S);
+  const list = projectList(S, P);
+  if (S.project && !list.find((n) => n.key === S.project)) S.project = null;
+  const rk = rankProjects(S, P, list, S.project);
+  if (rk.flow) rk.how = flowNow(S, rk.flow).how;
+  const tasks = taskList(S, P, rk);
+  const lines = runway(S, tasks[0]);
+  app.innerHTML = `<div class="screen">${statusBar(lines, tasks[0])}
+    ${ui.inv ? inventoryPane() : projectsPane(P, rk) + tasksPane(tasks) + stashPane()}
+    ${handsBar()}</div>`;
+  if (ui.resetProjScroll) { keep['proj-list'] = 0; ui.resetProjScroll = false; }
+  for (const id in keep) { const el = document.getElementById(id); if (el) el.scrollTop = keep[id]; }
 }
 
 // ------------------------------------------------------------------ input
@@ -409,10 +589,10 @@ function run(cmd) {
   if (cmd.t === 'travel' && res.ok) ui.view = S.at;
   save();
   const elapsed = S.t - t0;
-  if (!res.ok || elapsed < 4 || ui.fast || matchMedia('(prefers-reduced-motion: reduce)').matches) return render();
+  const bar = document.getElementById('progress');
+  if (!res.ok || elapsed < 4 || ui.fast || !bar || matchMedia('(prefers-reduced-motion: reduce)').matches) return render();
   // The waiting bar: purely cosmetic, the game state has already advanced.
   ui.busy = true;
-  const bar = document.getElementById('progress');
   const ms = Math.min(1600, 220 + elapsed * 5);
   document.getElementById('app').classList.add('busy');
   bar.hidden = false;
@@ -423,7 +603,8 @@ function run(cmd) {
 
 function start(seed) {
   S = newGame(seed || randomSeed());
-  Object.assign(ui, { tab: 'plan', sel: null, view: null, choices: {}, targets: {}, notice: '', confirmNew: false, fresh: 0 });
+  Object.assign(ui, { overlay: null, menu: false, inv: false, projBack: [], tab: 'plan', sel: null, view: null, choices: {}, targets: {}, notice: '', confirmNew: false, fresh: 0 });
+  S.choices = ui.choices;
   save(); render();
 }
 
@@ -433,6 +614,15 @@ function uiAction(a, el) {
   else if (k === 'sel') { ui.sel = v || null; ui.tab = 'plan'; ui.reveal = !!v; }
   else if (k === 'planFilter') ui.planFilter = v;
   else if (k === 'goal') { if (el.checked) S.goals[v] = 1; else delete S.goals[v]; save(); }
+  else if (k === 'proj') { S.project = S.project === v && !ui.overlay ? null : v; ui.projBack = []; ui.overlay = null; ui.inv = false; ui.resetProjScroll = true; save(); }
+  else if (k === 'proj+') { if (S.project) ui.projBack.push(S.project); S.project = v; ui.resetProjScroll = true; save(); }
+  else if (k === 'projBack') { S.project = ui.projBack.pop() || null; ui.resetProjScroll = true; save(); }
+  else if (k === 'projClear') { S.project = null; ui.projBack = []; ui.resetProjScroll = true; save(); }
+  else if (k === 'overlay') { ui.overlay = v || null; ui.menu = false; window.scrollTo(0, 0); }
+  else if (k === 'menu') ui.menu = !ui.menu;
+  else if (k === 'vitals') ui.vitals = !ui.vitals;
+  else if (k === 'inv') ui.inv = !ui.inv;
+  else if (k === 'collapse') ui.collapsed[v] = !ui.collapsed[v];
   else if (k === 'view') ui.view = v;
   else if (k === 'target') ui.targets[v] = !ui.targets[v];
   else if (k === 'hours') ui.hours = Number(v);
@@ -445,10 +635,55 @@ function uiAction(a, el) {
   render();
 }
 
+// Dragging in the inventory. Pointer events rather than HTML drag-and-drop,
+// which does not work on touch screens. Only the handle starts a drag, so
+// the lists still scroll normally under a finger.
+function setupDrag() {
+  let drag = null;
+  document.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('[data-drag]');
+    if (!h || ui.busy) return;
+    e.preventDefault();
+    const row = h.closest('.inv-item');
+    drag = { id: Number(h.dataset.drag), ghost: null, x: e.clientX, y: e.clientY, label: row.querySelector('.item-name').textContent };
+  });
+  document.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    if (!drag.ghost) {
+      if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+      drag.ghost = document.createElement('div');
+      drag.ghost.className = 'ghost';
+      drag.ghost.textContent = drag.label;
+      document.body.appendChild(drag.ghost);
+    }
+    drag.ghost.style.transform = `translate(${e.clientX + 8}px, ${e.clientY - 18}px)`;
+    document.querySelectorAll('.drop-hover').forEach((el) => el.classList.remove('drop-hover'));
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const target = under && under.closest('[data-drop]');
+    if (target) target.classList.add('drop-hover');
+  });
+  const end = (e) => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    if (d.ghost) d.ghost.remove();
+    document.querySelectorAll('.drop-hover').forEach((el) => el.classList.remove('drop-hover'));
+    if (!d.ghost || e.type === 'pointercancel') return;
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const target = under && under.closest('[data-drop]');
+    if (!target) return;
+    const to = target.dataset.drop;
+    run(to === 'hands' ? { t: 'grab', id: d.id } : { t: 'move', id: d.id, to: /^\d+$/.test(to) ? Number(to) : to });
+  };
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
+}
+
 export function boot(saved) {
   S = saved || load();
   if (S && S.v !== 1) S = null;
   if (S && !S.goals) S.goals = {};
+  if (S) { ui.choices = S.choices = S.choices || {}; }
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-cmd],[data-ui]');
     if (!el || el.disabled || ui.busy || el.tagName === 'INPUT') return;
@@ -462,7 +697,7 @@ export function boot(saved) {
     if (el.dataset.move) run({ t: 'move', id: Number(el.dataset.move), to: Number(el.value) });
     else if (el.dataset.replace) { const [id, slot] = el.dataset.replace.split(':'); run({ t: 'replace', id: Number(id), slot, with: Number(el.value) }); }
   });
+  setupDrag();
   if (S) render(); else start();
   return () => freeze(S);
 }
-

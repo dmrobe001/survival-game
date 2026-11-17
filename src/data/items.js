@@ -82,7 +82,7 @@ K('pitch', { name: 'pitch stick', mass: 0.05, vol: 0.05, grain: 3, hand: 5, tags
 K('cobble', { name: 'cobble', mass: 0.8, vol: 0.4, grain: 9, tags: ['cobble'],
   q: { hardness: 60, thermal: 60, integrity: 100 },
   caps: { pound: (it) => 0.9 * Q(it, 'hardness') * sound(it, 20), hunt: () => 12 }, wear: { pound: { _: { integrity: 3 } } } });
-K('toolstone', { name: 'toolstone nodule', mass: 1.2, vol: 0.5, grain: 10, q: { knappability: 50 } });
+K('toolstone', { name: 'toolstone', unit: 'kg', mass: 1, vol: 0.4, grain: 10, hand: 6, lump: true, q: { knappability: 50 } });
 K('flake', { name: 'stone flake', mass: 0.03, vol: 0.01, grain: 3, hand: 3, tags: ['blade'],
   q: { sharpness: 60, integrity: 100 },
   caps: { cut: (it) => 0.85 * Q(it, 'sharpness'), scrape: (it) => 0.6 * Q(it, 'sharpness'), pierce: (it) => 0.3 * Q(it, 'sharpness') },

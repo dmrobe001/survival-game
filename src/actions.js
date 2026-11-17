@@ -15,7 +15,7 @@ import { KINDS, UNIT } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
 import { RECIPES, TAG_NAMES, CAP_NAMES } from './data/recipes.js';
 import { genLocation, findStart, prospect, dist, bearing } from './world.js';
-import { kindOf, mk, itemName, label, massOf, contSpec, whyNotHold, roomFor, capOf, addTo, split, reach, find, removeFrom,
+import { kindOf, mk, itemName, label, massOf, contSpec, whyNotHold, roomFor, capOf, addTo, split, reach, find, removeFrom, canMerge,
   best, here, handsFor, handsUsed, carriedMass, wornIn, missingSlots } from './items.js';
 import { say, advance, isDark, raining, condSev, footwear } from './sim.js';
 
@@ -79,7 +79,9 @@ function give(s, kind, n, q = {}, extra = null) {
   if (n <= 0) return null;
   const it = mk(s, kind, n, q);
   if (extra) Object.assign(it, extra);
-  return addTo(loc(s).items, it);
+  const placed = addTo(loc(s).items, it);
+  if (s._made && !s._made.includes(placed)) s._made.push(placed);
+  return placed;
 }
 
 // ------------------------------------------------------------------ capabilities, including the composite "boil"
@@ -109,6 +111,7 @@ export function capInfo(s, cap) {
 function wearTool(s, cap, hours) {
   const tool = best(s, cap).it;
   if (!tool) return;
+  if (s._used) s._used.push(tool);
   const spec = (kindOf(tool).wear || {})[cap];
   for (const slot in spec || {}) {
     const target = slot === '_' ? tool : tool.parts && tool.parts[slot];
@@ -137,7 +140,7 @@ export function gatherStatus(s, rid) {
   }
   let boost = 1;
   if (g.boost) {
-    const b = best(s, g.boost.cap);
+    const b = g.boost.cap === 'bag' ? bagFor(s, g.kind) : best(s, g.boost.cap);
     boost = 1 + b.level / g.boost.per;
     lines.push({ ok: b.level > 0, opt: true, text: `faster with a ${CAP_NAMES[g.boost.cap]} ${b.it ? `(${itemName(b.it)}: ×${fmt(boost)})` : ''}` });
   }
@@ -168,6 +171,17 @@ function doGather(s, cmd) {
   give(s, g.kind, n, q);
   say(s, `You gather ${kind.unit === 'ea' ? n + ' × ' : fmt(n) + UNIT[kind.unit] + ' of '}${kind.name}.`);
   return { ok: true };
+}
+
+// The best carried container that will actually hold what you are picking
+// (seed sifts through a basket; a hide bag holds it).
+export function bagFor(s, kind) {
+  let top = null, level = 0;
+  for (const { it } of reach(s)) {
+    const v = capOf(it, 'bag');
+    if (v > level && KINDS[kind].grain >= contSpec(it).mesh) { level = v; top = it; }
+  }
+  return { it: top, level };
 }
 
 // ------------------------------------------------------------------ recipe requirements
@@ -279,7 +293,8 @@ function takeInputs(s, r, st) {
       const n = Math.min(stack.n, need);
       need -= n;
       let piece;
-      if (n >= stack.n - 1e-9) { piece = stack; removeFrom(find(s, stack.id).list, stack); } else piece = split(s, stack, n);
+      if (n >= stack.n - 1e-9) { piece = stack; removeFrom(find(s, stack.id).list, stack); }
+      else { piece = split(s, stack, n); if (s._partial && s.c.hands.includes(stack)) s._partial.push(stack); }
       if (!merged) merged = piece;
       else {
         const tot = merged.n + piece.n;
@@ -432,6 +447,7 @@ function doEat(s, cmd) {
   if (c.stomach >= 2000) return { ok: false, msg: 'You are too full to eat more.' };
   let n = Math.min(it.n, food.portion, (2300 - c.stomach) / food.kcal);
   if (kindOf(it).unit === 'ea') n = Math.max(1, Math.floor(n));
+  if (n < 0.01) { removeFrom(f.list, it); return { ok: false, msg: 'Only crumbs were left; you brush them away.' }; }
   const share = n / food.portion;
   let kcal = food.kcal * n;
   advance(s, 10, 1.5, 'rest');
@@ -444,7 +460,7 @@ function doEat(s, cmd) {
   if (it.q.fresh != null && it.q.fresh < 25) p += 0.4 * share;
   if (rand(s.rng) < p) addCond(s, 'gastro', 25 + Math.round(40 * rand(s.rng)));
   it.n = Math.round((it.n - n) * 1000) / 1000;
-  if (it.n <= 0.001) removeFrom(f.list, it);
+  if (it.n < 0.01) removeFrom(f.list, it);
   return { ok: true };
 }
 
@@ -658,9 +674,90 @@ function removeFromAndAdd(s, f, it, n, dest) {
 }
 
 // ------------------------------------------------------------------ dispatch
+// ------------------------------------------------------------------ hands
+// What you just collected or made ends up in your hand. Policy:
+//  * what is left of something you were working from (a core you knapped,
+//    fiber you twisted) is set down, freeing that hand;
+//  * each new thing goes first into a container you hold or wear that fits
+//    it, otherwise into one hand: topping up a like stack, taking a free hand,
+//    or setting down the thing you have held longest;
+//  * tools you just used are never set down, nor is something just picked up.
+//  * Only one hand's worth is picked up; the rest stays on the ground.
+function freeHandFor(s, it, keep) {
+  const k = kindOf(it), want = k.hands === 2 ? 2 : 1;
+  while (2 - handsUsed(s) < want) {
+    const drop = s.c.hands.find((h) => !keep.includes(h));
+    if (!drop) return false;
+    removeFrom(s.c.hands, drop);
+    addTo(loc(s).items, drop);
+  }
+  return true;
+}
+
+function pickUp(s, it, list, keep, handful = true) {
+  const k = kindOf(it);
+  if (k.fixed || k.liquid || it.proc || it.proj) return null;
+  const room = MAX_CARRY - carriedMass(s);
+  for (const c of s.c.hands.concat(s.c.worn)) {
+    if (!contSpec(c) || whyNotHold(c, it, k.unit === 'ea' ? 1 : 0.001)) continue;
+    let n = Math.min(it.n, roomFor(c, it), (room / massOf(it)) * it.n);
+    if (k.unit === 'ea') n = Math.floor(n + 1e-9);
+    if (n <= 1e-6) continue;
+    const piece = n < it.n - 1e-9 ? split(s, it, n) : (removeFrom(list, it), it);
+    return addTo((c.in = c.in || []), piece);
+  }
+  const same = s.c.hands.find((h) => canMerge(h, it));
+  let cap;
+  if (same) cap = handsFor(same) * k.hand - same.n;
+  if (!same || cap < (k.unit === 'ea' ? 1 : 1e-3)) {
+    if (!freeHandFor(s, it, keep)) return null;
+    cap = k.hands === 2 ? it.n : handful ? k.hand : (2 - handsUsed(s)) * k.hand;
+  }
+  let n = Math.min(it.n, cap, (room / Math.max(massOf(it), 1e-9)) * it.n);
+  if (k.unit === 'ea') n = Math.floor(n + 1e-9);
+  if (n <= 1e-6) return null;
+  const piece = n < it.n - 1e-9 ? split(s, it, n) : (removeFrom(list, it), it);
+  return addTo(s.c.hands, piece);
+}
+
+function settleHands(s) {
+  const ground = loc(s).items;
+  for (const p of s._partial) if (s.c.hands.includes(p) && p.n > 1e-6) { removeFrom(s.c.hands, p); addTo(ground, p); }
+  const keep = s._used.filter((t) => s.c.hands.includes(t));
+  for (const it of s._made) {
+    if (!ground.includes(it)) continue;
+    const held = pickUp(s, it, ground, keep);
+    if (held) keep.push(held);
+  }
+}
+
+// Tap something on the ground: one handful of it goes into a hand, setting
+// down whatever you have held longest if both hands are full.
+function doGrab(s, cmd) {
+  const f = find(s, cmd.id);
+  if (!f) return { ok: false, msg: 'That is not within reach.' };
+  if (f.list === s.c.hands) return { ok: false, msg: 'Already in hand.' };
+  if (kindOf(f.it).fixed) return { ok: false, msg: 'That is built in place.' };
+  const got = pickUp(s, f.it, f.list, [], true);
+  return got ? { ok: true } : { ok: false, msg: `Too heavy to carry with everything else (${MAX_CARRY} kg).` };
+}
+
+// Eat the most filling thing within reach that will not make you sick.
+function bestFood(s) {
+  let top = null, score = 0;
+  for (const { it } of reach(s)) {
+    const f = kindOf(it).food;
+    if (!f || (it.q.tannin || 0) > 25 || (it.q.fresh != null && it.q.fresh < 25)) continue;
+    const v = f.kcal * Math.min(it.n, f.portion) * (1 - 3 * f.risk) + (it.q.fresh != null ? (100 - it.q.fresh) : 0); // eat what will spoil first
+    if (v > score) { score = v; top = it; }
+  }
+  return top;
+}
+export const bestFoodItem = bestFood;
+
 const HANDLERS = {
   gather: doGather, recipe: doRecipe, work: doWork, replace: doReplace, dismantle: doDismantle, eat: doEat, drink: doDrink, drinkItem: doDrinkItem,
-  fill: doFill, rest: doRest, sleep: (s) => doSleep(s), survey: doSurvey, checkTraps: doCheckTraps, explore: doExplore, travel: doTravel, move: doMove,
+  fill: doFill, grab: doGrab, eatBest: (s) => { const it = bestFood(s); return it ? doEat(s, { id: it.id }) : { ok: false, msg: 'Nothing worth eating within reach.' }; }, rest: doRest, sleep: (s) => doSleep(s), survey: doSurvey, checkTraps: doCheckTraps, explore: doExplore, travel: doTravel, move: doMove,
 };
 const STRENUOUS = { gather: 1, recipe: 1, work: 1, survey: 1, checkTraps: 1, explore: 1, travel: 1, replace: 1 };
 
@@ -670,7 +767,10 @@ export function act(s, cmd) {
   if (!h) return { ok: false, msg: 'Unknown action.' };
   if (STRENUOUS[cmd.t] && s.c.fatigue >= 92 && !(cmd.t === 'recipe' && RECIPES[cmd.id] && RECIPES[cmd.id].met <= 2))
     return { ok: false, msg: 'You are too exhausted for that. Rest or sleep.' };
+  s._made = []; s._used = []; s._partial = [];
   const res = h(s, cmd);
+  if (res.ok) settleHands(s);
+  delete s._made; delete s._used; delete s._partial;
   if (res.ok && !s.dead && s.c.fatigue >= 100) {
     say(s, 'Your legs give way. You collapse where you stand and sleep.', 'bad');
     doSleep(s, 240);

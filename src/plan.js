@@ -91,7 +91,20 @@ function tables() {
       if (level > 0) (capKinds[cap] = capKinds[cap] || []).push({ kind, level });
     }
   }
-  return (TABLES = { producers, gatherers, capKinds, procWait });
+  const outputs = {};
+  for (const kind in producers) for (const p of producers[kind]) if (!p.trap) (outputs[p.rid] = outputs[p.rid] || []).push(kind);
+  return (TABLES = { producers, gatherers, capKinds, procWait, outputs });
+}
+
+// Kinds of thing a recipe makes, and the capability levels a typical one has.
+export const outputsOf = (rid) => tables().outputs[rid] || [];
+export function capsFromRecipe(rid) {
+  const out = {};
+  for (const kind of outputsOf(rid)) for (const cap in tables().capKinds) {
+    const hit = tables().capKinds[cap].find((x) => x.kind === kind);
+    if (hit) out[cap] = Math.max(out[cap] || 0, hit.level);
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------ how long does exploring for X take, on average?
