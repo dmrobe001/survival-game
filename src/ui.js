@@ -15,7 +15,7 @@ import { REPEAT, projectList, rankProjects, taskList, runway, flowText, gainText
 
 const SAVE_KEY = 'foothold-save-v1';
 let S = null;
-const ui = { overlay: null, menu: false, inv: false, vitals: false, collapsed: {}, projBack: [], tab: 'plan', sel: null, planFilter: 'all', edges: [], view: null, choices: {}, targets: {}, hours: 2, notice: '', busy: false, fast: false, confirmNew: false };
+const ui = { theme: 'auto', overlay: null, menu: false, inv: false, vitals: false, collapsed: {}, projBack: [], tab: 'plan', sel: null, planFilter: 'all', edges: [], view: null, choices: {}, targets: {}, hours: 2, notice: '', busy: false, fast: false, confirmNew: false };
 
 // ------------------------------------------------------------------ persistence
 // JSON cannot hold Infinity; water sources have infinite abundance.
@@ -24,6 +24,14 @@ export const thaw = (str) => JSON.parse(str, (k, v) => (v === '__inf' ? Infinity
 function save() { try { localStorage.setItem(SAVE_KEY, freeze(S)); } catch (e) { /* storage unavailable: play on without saving */ } }
 function load() { try { const t = localStorage.getItem(SAVE_KEY); return t ? thaw(t) : null; } catch (e) { return null; } }
 const randomSeed = () => Math.random().toString(36).slice(2, 8);
+
+// Light, dark, or follow the device. Remembered in this browser only.
+const THEME_KEY = 'foothold-theme';
+function applyTheme() {
+  const root = document.documentElement;
+  if (ui.theme === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', ui.theme);
+  try { localStorage.setItem(THEME_KEY, ui.theme); } catch (e) { /* not saved; fine */ }
+}
 
 // ------------------------------------------------------------------ little HTML builders
 const btn = (text, cmd, o = {}) => `<button class="${o.cls || ''}" ${o.off ? 'disabled' : ''} ${o.title ? `title="${esc(o.title)}"` : ''} data-cmd="${esc(JSON.stringify(cmd))}">${text}</button>`;
@@ -401,7 +409,7 @@ function statusBar(lines, top) {
       ${zoned(soon, true)}</button>
     <div class="sbar-right"><span class="when">D${dayOf(S)} ${clock(S.t)}<br>${sky} ${Math.round(airTemp(S))}°</span>${uibtn('☰', 'menu', { cls: 'menu-btn', on: ui.menu })}</div>
     ${conds ? `<div class="chips conds">${conds}</div>` : ''}${all}
-    ${ui.menu ? `<nav class="menu">${[['body', 'Body'], ['web', 'Technique web'], ['places', 'Places and exploring'], ['journal', 'Journal'], ['guide', 'Guide and new game']].map(([k, n]) => uibtn(n, 'overlay:' + k)).join('')}</nav>` : ''}
+    ${ui.menu ? `<nav class="menu">${uibtn(`Theme: ${{ auto: 'follow device', light: 'light', dark: 'dark' }[ui.theme]}`, 'theme')}${[['body', 'Body'], ['web', 'Technique web'], ['places', 'Places and exploring'], ['journal', 'Journal'], ['guide', 'Guide and new game']].map(([k, n]) => uibtn(n, 'overlay:' + k)).join('')}</nav>` : ''}
   </header>
   <div class="progress" id="progress" hidden><i></i></div>
   ${ui.notice ? `<p class="notice" role="status">${esc(ui.notice)}</p>` : `<button class="lastlog ${S.log.length && S.log[S.log.length - 1].cls}" data-ui="overlay:journal">${esc(S.log.length ? S.log[S.log.length - 1].msg : '')}</button>`}`;
@@ -623,6 +631,7 @@ function uiAction(a, el) {
   else if (k === 'projClear') { S.project = null; ui.projBack = []; ui.resetProjScroll = true; save(); }
   else if (k === 'overlay') { ui.overlay = v || null; ui.menu = false; window.scrollTo(0, 0); }
   else if (k === 'menu') ui.menu = !ui.menu;
+  else if (k === 'theme') { ui.theme = { auto: 'light', light: 'dark', dark: 'auto' }[ui.theme]; applyTheme(); }
   else if (k === 'vitals') ui.vitals = !ui.vitals;
   else if (k === 'inv') ui.inv = !ui.inv;
   else if (k === 'collapse') ui.collapsed[v] = !ui.collapsed[v];
@@ -701,6 +710,8 @@ export function boot(saved) {
     else if (el.dataset.replace) { const [id, slot] = el.dataset.replace.split(':'); run({ t: 'replace', id: Number(id), slot, with: Number(el.value) }); }
   });
   setupDrag();
+  try { const th = localStorage.getItem(THEME_KEY); if (th === 'light' || th === 'dark') ui.theme = th; } catch (e) { /* default */ }
+  if (ui.theme !== 'auto') applyTheme();
   if (S) render(); else start();
   return () => freeze(S);
 }
