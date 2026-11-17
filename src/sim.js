@@ -85,6 +85,34 @@ export function sleepQuality(s) {
 }
 
 // ---- body
+// ---- reserves, thresholds and impairment
+// Each reserve has a comfort threshold and a harm threshold. Above the first
+// nothing happens; you just get closer to it. Between the two you are
+// distracted or weakened, and work, travel and injury odds suffer in
+// proportion to how far below the line you are. Past the second, health
+// itself starts to go.
+//   food     quick energy (stomach + glycogen), kcal: hungry below 800; below 0 you live on fat
+//   water    deficit in litres: thirsty and distracted past 1 L (about 1.5% of body mass,
+//            where measurable impairment starts); harm past 4.5 L (about 6%)
+//   stamina  fatigue 0..100: tired past 60, collapse at 100
+//   warmth   chill 0..100: shivering and clumsy past 30, harm past 70
+export const LIMITS = { food: { ok: 800, full: 3000 }, water: { ok: 1, harm: 4.5 }, stamina: { ok: 60, harm: 100 }, warmth: { ok: 30, harm: 70 } };
+
+// Litres per hour: about 2.4 L a day at rest, several times that working hard.
+export const thirstRate = (met, sick) => (0.1 + 0.12 * Math.max(0, met - 1)) * (sick ? 2.2 : 1);
+
+export function impairment(s) {
+  const c = s.c, L = LIMITS, why = [];
+  let slow = 0, risk = 0;
+  const E = c.stomach + c.glyc;
+  if (E < L.food.ok) { slow += 0.15 * (1 - E / L.food.ok); why.push('hungry'); }
+  if (E <= 0) { slow += 0.15; why[why.length - 1] = 'weak with hunger'; }
+  if (c.thirst > L.water.ok) { const d = clamp((c.thirst - L.water.ok) / (L.water.harm - L.water.ok), 0, 1); slow += 0.3 * d; risk += 0.5 * d; why.push('thirsty'); }
+  if (c.fatigue > L.stamina.ok) { const d = (c.fatigue - L.stamina.ok) / (L.stamina.harm - L.stamina.ok); slow += 0.4 * d; risk += d; why.push('tired'); }
+  if (c.chill > L.warmth.ok) { const d = clamp((c.chill - L.warmth.ok) / (L.warmth.harm - L.warmth.ok), 0, 1); slow += 0.3 * d; risk += 0.5 * d; why.push('cold'); }
+  return { slow: 1 + slow, risk: 1 + risk, why };
+}
+
 export function condSev(s, type) {
   const c = s.c.cond.find((x) => x.type === type);
   return c ? c.sev : 0;
@@ -102,12 +130,12 @@ function tickBody(s, h, met, mode) {
   c.glyc -= met * 70 * h;
   if (c.glyc < 0) { c.fat += c.glyc; c.glyc = 0; }
   // water
-  c.thirst += h * 0.07 * (1 + 0.45 * (met - 1)) * (sick ? 2.2 : 1);
+  c.thirst += h * thirstRate(met, sick);
   // fatigue
   if (mode === 'sleep') c.fatigue -= 12 * sleepQuality(s) * h;
   else if (met <= 1.3) c.fatigue -= 3 * h;
   else {
-    const strain = 1 + (c.glyc <= 0 ? 0.5 : 0) + (c.thirst > 2 ? 0.4 : 0) + (c.chill > 50 ? 0.3 : 0) + (sick ? 0.4 : 0);
+    const strain = 1 + (c.glyc <= 0 ? 0.5 : 0) + (c.thirst > LIMITS.water.ok ? 0.4 : 0) + (c.chill > 50 ? 0.3 : 0) + (sick ? 0.4 : 0);
     c.fatigue += ((met - 1.2) * 2 + 0.6) * h * strain;
   }
   c.fatigue = clamp(c.fatigue, 0, 100);
@@ -116,14 +144,14 @@ function tickBody(s, h, met, mode) {
   if (T < 12) c.chill += (12 - T) * 0.9 * h; else c.chill -= ((T - 12) * 2 + 2) * h;
   c.chill = clamp(c.chill, 0, 100);
   // health
-  const dmg = { thirst: c.thirst > 3 ? (c.thirst - 3) * 1.2 * h : 0, starvation: c.fat <= 0 ? 1.5 * h : 0, exposure: c.chill > 70 ? (c.chill - 70) * 0.12 * h : 0, injury: 0 };
+  const dmg = { thirst: c.thirst > LIMITS.water.harm ? (c.thirst - LIMITS.water.harm) * 1.5 * h : 0, starvation: c.fat <= 0 ? 1.5 * h : 0, exposure: c.chill > 70 ? (c.chill - 70) * 0.12 * h : 0, injury: 0 };
   for (const x of c.cond) {
     if (x.sev > 50) dmg.injury += 0.15 * h * (x.sev / 50);
     x.sev -= (HEAL[x.type] || 10) * (h / 24) * (met <= 1.3 ? 1.5 : 1) * (c.glyc > 0 ? 1 : 0.5);
   }
   c.cond = c.cond.filter((x) => x.sev > 0);
   const total = dmg.thirst + dmg.starvation + dmg.exposure + dmg.injury;
-  if (total > 0) c.health -= total; else if (c.glyc > 0 && c.thirst < 2) c.health = Math.min(100, c.health + 0.3 * h);
+  if (total > 0) c.health -= total; else if (c.glyc > 0 && c.thirst < LIMITS.water.ok) c.health = Math.min(100, c.health + 0.3 * h);
   c.fat = Math.max(0, c.fat);
   if (c.health <= 0 && !s.dead) {
     c.health = 0;

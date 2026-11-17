@@ -3,7 +3,7 @@
 :root {
   --bg: #e6e9df; --panel: #f3f5ee; --ink: #1c2620; --muted: #56635a; --line: #c5ccbd;
   --accent: #3c6837; --accent-ink: #f6f8f1; --chip: #dbe1d2; --track: #ccd3c4;
-  --good: #2c6a4c; --warn: #8a5d0c; --bad: #a23526; --warm: #f0e3c4;
+  --good: #2c6a4c; --warn: #8a5d0c; --bad: #a23526; --warm: #f0e3c4; --zone: #e9cfc4;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -11,13 +11,13 @@
   :root:not([data-theme="light"]) {
     --bg: #111613; --panel: #19201c; --ink: #dce3d7; --muted: #8f9c91; --line: #2b352f;
     --accent: #93b877; --accent-ink: #0f150e; --chip: #232c26; --track: #2a342d;
-    --good: #7cc49a; --warn: #d8a646; --bad: #e37f6b; --warm: #3a3220; color-scheme: dark;
+    --good: #7cc49a; --warn: #d8a646; --bad: #e37f6b; --warm: #3a3220; --zone: #3d2a25; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #111613; --panel: #19201c; --ink: #dce3d7; --muted: #8f9c91; --line: #2b352f;
   --accent: #93b877; --accent-ink: #0f150e; --chip: #232c26; --track: #2a342d;
-  --good: #7cc49a; --warn: #d8a646; --bad: #e37f6b; --warm: #3a3220; color-scheme: dark;
+  --good: #7cc49a; --warn: #d8a646; --bad: #e37f6b; --warm: #3a3220; --zone: #3d2a25; color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -257,3 +257,9 @@ h2.pane-h small, .pane-h small { text-transform: none; letter-spacing: 0; font-w
 .overlay .log { position: static; max-height: none; }
 .overlay.body .top { margin-bottom: 8px; }
 .dead { max-width: 600px; margin: 0 auto; padding: 24px 16px; }
+
+/* two-zone reserve bars: the tick marks the comfort line; left of it is the impaired zone */
+.track.zoned { position: relative; overflow: visible; background: linear-gradient(to right, var(--zone) 0 var(--t), var(--track) var(--t) 100%); }
+.track.zoned i { border-radius: 2px; }
+.track.zoned::after { content: ""; position: absolute; left: var(--t); top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ink); }
+.soon .track.zoned.big { height: 11px; }

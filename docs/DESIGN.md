@@ -89,9 +89,25 @@ now, what is on the ground, and your two hands.
   fire per hour of wood-gathering), holding everything else fixed.
 - **Tasks** are only what one tap can do now. Steps on the selected
   project's route come first, in route order.
-- **The status bar** shows each reserve's time to empty at the metabolic
-  rate of the top task: food, water, stamina, warmth, and the fire if one
-  is burning. The soonest is shown; tap for all.
+- **The status bar** shows reserves in two zones, split by a comfort line
+  (the tick). Above it nothing happens; the bar just counts down. Below it
+  you are impaired: work and travel slow and injuries get likelier, in
+  proportion to depth, until a harm line where health starts to go. The
+  soonest crossing is shown, paced on the first task that takes real time;
+  tap for all. Thresholds live in `LIMITS` in `src/sim.js`:
+
+  | Reserve | Impaired past | Harmed past | Max penalty at harm line |
+  | --- | --- | --- | --- |
+  | Food (stomach + glycogen) | under 800 kcal | under 0 (then fat) | +30% work time |
+  | Water deficit | 1 L | 4.5 L | +30% time, injury ×1.5 |
+  | Fatigue | 60 | 100 (collapse) | +40% time, injury ×2 |
+  | Chill | 30 | 70 | +30% time, injury ×1.5 |
+
+  Water loss is 0.1 L/h at rest plus 0.12 L/h per unit of metabolic rate
+  above rest, so a few hours of work without drinking makes you thirsty.
+  The thresholds sit near where measurable impairment is reported (about
+  1.5–2% of body mass for water), but every number here is a judgment
+  call, not a sourced value.
 - **Hands.** What you collect or make lands in a hand (or a container you
   hold or wear that fits it). The remainder of something you worked from,
   such as a knapped core, is set down. Tools just used are never displaced;

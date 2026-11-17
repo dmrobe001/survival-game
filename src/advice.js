@@ -16,7 +16,7 @@ import { RESOURCES } from './data/resources.js';
 import { RECIPES } from './data/recipes.js';
 import { kindOf, here, reach, contSpec } from './items.js';
 import { capInfo, gatherStatus, waterHere, bestFoodItem, travelInfo, trapsHere, bagFor } from './actions.js';
-import { feltTemp, sleepQuality, raining } from './sim.js';
+import { feltTemp, sleepQuality, raining, LIMITS, thirstRate } from './sim.js';
 import { capsFromRecipe, outputsOf } from './plan.js';
 import { clamp, fmt, fmtTime } from './util.js';
 
@@ -242,20 +242,37 @@ export function taskList(s, P, ranked) {
   return out;
 }
 
-// ------------------------------------------------------------------ what runs out first
-// Each reserve's time to empty if you kept doing `task` without a break.
+// ------------------------------------------------------------------ reserves at the pace of the top task
+// For each reserve: where it stands (frac), where the comfort line is
+// (tfrac), whether you are already past it, and how long until the next
+// line at the metabolic rate of `task`: the comfort line if you are above
+// it, the harm line if you are below.
 export function runway(s, task) {
-  const c = s.c, met = (task ? task.met : 1.5) + (c.chill > 30 ? 0.4 : 0), mode = task ? task.mode : 'act';
+  const c = s.c, L = LIMITS, met = (task ? task.met : 1.5) + (c.chill > 30 ? 0.4 : 0), mode = task ? task.mode : 'act';
+  const sick = c.cond.some((x) => x.type === 'gastro');
   const lines = [];
-  const kcal = c.stomach + c.glyc;
-  lines.push({ name: 'Food', frac: kcal / 4000, h: kcal > 0 ? kcal / (70 * met) : 0, word: kcal > 0 ? 'until hungry' : 'living on fat' });
-  const thirstRate = 0.07 * (1 + 0.45 * (met - 1));
-  lines.push({ name: 'Water', frac: 1 - c.thirst / 5, h: Math.max(0, 3 - c.thirst) / thirstRate, word: 'until parched' });
-  if (mode !== 'sleep' && met > 1.3) lines.push({ name: 'Stamina', frac: 1 - c.fatigue / 100, h: (100 - c.fatigue) / ((met - 1.2) * 2 + 0.6), word: 'until you drop' });
-  const T = feltTemp(s, met, mode);
-  if (T < 12) lines.push({ name: 'Warmth', frac: 1 - c.chill / 100, h: Math.max(0, 70 - c.chill) / ((12 - T) * 0.9), word: 'until hypothermic' });
+  const E = c.stomach + c.glyc, burn = 70 * met;
+  if (E > L.food.ok) lines.push({ name: 'Food', frac: E / L.food.full, tfrac: L.food.ok / L.food.full, h: (E - L.food.ok) / burn, word: 'until hungry' });
+  else if (E > 0) lines.push({ name: 'Food', frac: E / L.food.full, tfrac: L.food.ok / L.food.full, low: true, h: E / burn, word: 'hungry · until weak' });
+  else lines.push({ name: 'Food', frac: 0, tfrac: L.food.ok / L.food.full, low: true, h: c.fat / burn, word: 'weak · living on fat' });
+  const tr = thirstRate(met, sick);
+  const wf = (x) => 1 - x / L.water.harm;
+  lines.push(c.thirst < L.water.ok
+    ? { name: 'Water', frac: wf(c.thirst), tfrac: wf(L.water.ok), h: (L.water.ok - c.thirst) / tr, word: 'until thirsty' }
+    : { name: 'Water', frac: wf(c.thirst), tfrac: wf(L.water.ok), low: true, h: Math.max(0, L.water.harm - c.thirst) / tr, word: 'thirsty · until harmed' });
+  const fr = mode === 'sleep' || met <= 1.3 ? 0 : (met - 1.2) * 2 + 0.6;
+  const sf = (x) => 1 - x / L.stamina.harm;
+  lines.push(c.fatigue < L.stamina.ok
+    ? { name: 'Stamina', frac: sf(c.fatigue), tfrac: sf(L.stamina.ok), h: fr ? (L.stamina.ok - c.fatigue) / fr : Infinity, word: 'until tired' }
+    : { name: 'Stamina', frac: sf(c.fatigue), tfrac: sf(L.stamina.ok), low: true, h: fr ? (L.stamina.harm - c.fatigue) / fr : Infinity, word: 'tired · until you drop' });
+  const T = feltTemp(s, met, mode), cr = T < 12 ? (12 - T) * 0.9 : 0;
+  const cf = (x) => 1 - x / L.warmth.harm;
+  lines.push(c.chill < L.warmth.ok
+    ? { name: 'Warmth', frac: cf(c.chill), tfrac: cf(L.warmth.ok), h: cr ? (L.warmth.ok - c.chill) / cr : Infinity, word: 'until cold' }
+    : { name: 'Warmth', frac: cf(c.chill), tfrac: cf(L.warmth.ok), low: true, h: cr ? Math.max(0, L.warmth.harm - c.chill) / cr : Infinity, word: 'cold · until harmed' });
   const fire = here(s).items.find((it) => it.kind === 'fire');
-  if (fire) lines.push({ name: 'Fire', frac: Math.min(1, fire.q.fuel / 6), h: fire.q.fuel / ((raining(s) ? 2 : 1)), word: 'until embers' });
-  lines.sort((a, b) => a.h - b.h);
+  if (fire) lines.push({ name: 'Fire', frac: Math.min(1, fire.q.fuel / 6), tfrac: 0, h: fire.q.fuel / (raining(s) ? 2 : 1), word: 'until embers' });
+  // already-impaired reserves first (soonest harm first), then the rest by time to their comfort line
+  lines.sort((a, b) => (b.low ? 1 : 0) - (a.low ? 1 : 0) || a.h - b.h);
   return lines;
 }

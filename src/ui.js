@@ -7,7 +7,7 @@ import { KINDS, UNIT, QUALITY_NOTE } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
 import { RECIPES, GROUPS, CAP_NAMES } from './data/recipes.js';
 import { kindOf, itemName, amountText, massOf, contSpec, usedVol, whyNotHold, capsOf, reach, here, handsUsed, handsFor, carriedMass, missingSlots, trashHere } from './items.js';
-import { hourOf, dayOf, airTemp, feltTemp, isDark, sleepQuality } from './sim.js';
+import { hourOf, dayOf, airTemp, feltTemp, isDark, sleepQuality, impairment, LIMITS } from './sim.js';
 import { newGame, act, gatherStatus, recipeStatus, planInput, slotSpec, waterHere, trapsHere, travelInfo, MAX_CARRY } from './actions.js';
 import { dist, bearing } from './world.js';
 import { makePlanner } from './plan.js';
@@ -118,7 +118,7 @@ function header() {
   const food = c.stomach + c.glyc;
   const foodWord = c.stomach > 1500 ? 'full' : c.stomach > 400 ? 'fed' : c.glyc > 800 ? 'peckish' : c.glyc > 0 ? 'hungry' : 'running on reserves';
   const days = c.fat / 2400;
-  const thirstWord = c.thirst < 0.5 ? 'quenched' : c.thirst < 1.5 ? 'thirsty' : c.thirst < 3 ? 'parched' : 'dangerously dry';
+  const thirstWord = c.thirst < 0.5 ? 'quenched' : c.thirst < LIMITS.water.ok ? 'a little thirsty' : c.thirst < 2.5 ? 'thirsty, distracted' : c.thirst < LIMITS.water.harm ? 'parched, impaired' : 'dangerously dry';
   const fatWord = c.fatigue < 25 ? 'fresh' : c.fatigue < 55 ? 'working' : c.fatigue < 80 ? 'tired' : 'exhausted';
   const chillWord = c.chill < 15 ? 'comfortable' : c.chill < 40 ? 'chilly' : c.chill < 70 ? 'cold' : 'hypothermic';
   const conds = c.cond.map((x) => chip(`${{ cut: 'cut hand', blister: 'blistered palms', sprain: 'sprained ankle', bruise: 'bruised', gastro: 'sick gut', burn: 'burn' }[x.type]} ${Math.round(x.sev)}`, 'low')).join('');
@@ -126,7 +126,7 @@ function header() {
     <div class="vitals">
       ${meter('Food', food / 4000, foodWord, c.glyc <= 0 ? 'bad' : '')}
       ${meter('Reserves', c.fat / 60000, `${Math.round(days)} days of fat`, days < 5 ? 'bad' : '')}
-      ${meter('Water', 1 - c.thirst / 5, thirstWord, c.thirst > 1.5 ? 'bad' : '')}
+      ${meter('Water', 1 - c.thirst / LIMITS.water.harm, thirstWord, c.thirst > LIMITS.water.ok ? 'bad' : '')}
       ${meter('Stamina', 1 - c.fatigue / 100, fatWord, c.fatigue > 80 ? 'bad' : '')}
       ${meter('Warmth', 1 - c.chill / 100, chillWord, c.chill > 40 ? 'bad' : '')}
       ${meter('Health', c.health / 100, `${Math.round(c.health)}%`, c.health < 50 ? 'bad' : '')}
@@ -382,19 +382,23 @@ function logView() {
 }
 
 // ------------------------------------------------------------------ main screen
-const VITAL_CLS = (l) => (l.h < 2 ? 'bad' : l.h < 6 ? 'warn' : '');
+const VITAL_CLS = (l) => (l.low ? (l.h < 3 ? 'bad' : 'warn') : '');
+const zoned = (l, big) => `<span class="track zoned ${big ? 'big' : ''}" style="--t:${Math.round(clamp(l.tfrac, 0, 1) * 1000) / 10}%"><i style="width:${Math.round(clamp(l.frac, 0, 1) * 1000) / 10}%"></i></span>`;
+const until = (l) => (l.h > 99 ? (l.low ? l.word.split(' · ')[0] + ' · holding' : 'fine for days') : `${l.low ? l.word.split(' · ')[0] + ' · ' : ''}~${fmtTime(l.h * 60)} ${l.low ? l.word.split(' · ')[1] : l.word}`);
 function statusBar(lines, top) {
   const soon = lines[0];
+  const imp = impairment(S);
   const sky = { clear: isDark(S) ? 'clear night' : 'clear', cloudy: 'overcast', rain: 'rain', storm: 'storm' }[S.weather.kind];
-  const conds = S.c.cond.map((x) => chip(`${{ cut: 'cut hand', blister: 'blisters', sprain: 'sprained ankle', bruise: 'bruised', gastro: 'sick gut', burn: 'burn' }[x.type]} ${Math.round(x.sev)}`, 'low')).join('');
-  const all = ui.vitals ? `<div class="vitals-all">${lines.map((l) => `<div class="vline ${VITAL_CLS(l)}"><span>${l.name}</span><div class="track"><i style="width:${Math.round(clamp(l.frac, 0, 1) * 100)}%"></i></div><span>${l.h > 99 ? 'days' : '~' + fmtTime(l.h * 60)} ${l.word}</span></div>`).join('')}
-      <div class="vline ${S.c.health < 50 ? 'bad' : ''}"><span>Health</span><div class="track"><i style="width:${Math.round(S.c.health)}%"></i></div><span>${Math.round(S.c.health)}%</span></div>
-      <div class="vline"><span>Reserves</span><div class="track"><i style="width:${Math.round(clamp(S.c.fat / 60000, 0, 1) * 100)}%"></i></div><span>${Math.round(S.c.fat / 2400)} days of fat</span></div>
-      <p class="muted small">At the pace of: ${esc(top ? top.name.toLowerCase() : 'what you are doing')}.</p></div>` : '';
+  const conds = S.c.cond.map((x) => chip(`${{ cut: 'cut hand', blister: 'blisters', sprain: 'sprained ankle', bruise: 'bruised', gastro: 'sick gut', burn: 'burn' }[x.type]} ${Math.round(x.sev)}`, 'low')).join('')
+    + (imp.why.length ? chip(`${imp.why.join(', ')}: work ${Math.round((imp.slow - 1) * 100)}% slower${imp.risk > 1.05 ? `, injury ×${fmt(imp.risk)}` : ''}`, 'warm') : '');
+  const all = ui.vitals ? `<div class="vitals-all">${lines.map((l) => `<div class="vline ${VITAL_CLS(l)}"><span>${l.name}</span>${zoned(l)}<span>${until(l)}</span></div>`).join('')}
+      <div class="vline ${S.c.health < 50 ? 'bad' : ''}"><span>Health</span><span class="track"><i style="width:${Math.round(S.c.health)}%"></i></span><span>${Math.round(S.c.health)}%</span></div>
+      <div class="vline"><span>Fat</span><span class="track"><i style="width:${Math.round(clamp(S.c.fat / 60000, 0, 1) * 100)}%"></i></span><span>${Math.round(S.c.fat / 2400)} days</span></div>
+      <p class="muted small">The tick on each bar is where discomfort starts; left of it, work slows and accidents get likelier. Times assume you keep ${esc(top ? top.name.toLowerCase() : 'going')}.</p></div>` : '';
   return `<header class="sbar">
     <button class="soon ${VITAL_CLS(soon)}" data-ui="vitals" aria-expanded="${ui.vitals}">
-      <span class="soon-top"><b>${soon.name}</b><span>${soon.h > 99 ? 'fine for days' : `~${fmtTime(soon.h * 60)} ${soon.word}`}</span></span>
-      <span class="track"><i style="width:${Math.round(clamp(soon.frac, 0, 1) * 100)}%"></i></span></button>
+      <span class="soon-top"><b>${soon.name}</b><span>${until(soon)}</span></span>
+      ${zoned(soon, true)}</button>
     <div class="sbar-right"><span class="when">D${dayOf(S)} ${clock(S.t)}<br>${sky} ${Math.round(airTemp(S))}°</span>${uibtn('☰', 'menu', { cls: 'menu-btn', on: ui.menu })}</div>
     ${conds ? `<div class="chips conds">${conds}</div>` : ''}${all}
     ${ui.menu ? `<nav class="menu">${[['body', 'Body'], ['web', 'Technique web'], ['places', 'Places and exploring'], ['journal', 'Journal'], ['guide', 'Guide and new game']].map(([k, n]) => uibtn(n, 'overlay:' + k)).join('')}</nav>` : ''}
@@ -566,8 +570,10 @@ function render() {
   const rk = rankProjects(S, P, list, S.project);
   if (rk.flow) rk.how = flowNow(S, rk.flow).how;
   const tasks = taskList(S, P, rk);
-  const lines = runway(S, tasks[0]);
-  app.innerHTML = `<div class="screen">${statusBar(lines, tasks[0])}
+  // pace the forecast on the first task that takes real time, not on a 3-minute drink
+  const pace = tasks.find((x) => x.minutes >= 20) || tasks[0];
+  const lines = runway(S, pace);
+  app.innerHTML = `<div class="screen">${statusBar(lines, pace)}
     ${ui.inv ? inventoryPane() : projectsPane(P, rk) + tasksPane(tasks) + stashPane()}
     ${handsBar()}</div>`;
   if (ui.resetProjScroll) { keep['proj-list'] = 0; ui.resetProjScroll = false; }

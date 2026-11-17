@@ -17,7 +17,7 @@ import { RECIPES, TAG_NAMES, CAP_NAMES } from './data/recipes.js';
 import { genLocation, findStart, prospect, dist, bearing } from './world.js';
 import { kindOf, mk, itemName, label, massOf, contSpec, whyNotHold, roomFor, capOf, addTo, split, reach, find, removeFrom, canMerge,
   best, here, handsFor, handsUsed, carriedMass, wornIn, missingSlots, trashHere } from './items.js';
-import { say, advance, isDark, raining, condSev, footwear } from './sim.js';
+import { say, advance, isDark, raining, condSev, footwear, impairment } from './sim.js';
 
 export const MAX_CARRY = 35; // kg felt
 
@@ -62,7 +62,7 @@ export function addCond(s, type, sev) {
 
 function rollRisks(s, risks, mult) {
   for (const r of risks || []) {
-    if (rand(s.rng) < r.p * mult) addCond(s, r.type, Math.round(r.sev[0] + (r.sev[1] - r.sev[0]) * rand(s.rng)));
+    if (rand(s.rng) < r.p * mult * impairment(s).risk) addCond(s, r.type, Math.round(r.sev[0] + (r.sev[1] - r.sev[0]) * rand(s.rng)));
   }
 }
 
@@ -70,7 +70,7 @@ function rollRisks(s, risks, mult) {
 function slowdown(s, outdoor) {
   let m = 1 + (condSev(s, 'cut') + condSev(s, 'blister') + condSev(s, 'burn')) / 150;
   if (isDark(s)) m *= outdoor ? 1.6 : (best(s, 'fire').level > 0 ? 1 : 1.4);
-  return m;
+  return m * impairment(s).slow;
 }
 
 function give(s, kind, n, q = {}, extra = null) {
@@ -527,7 +527,7 @@ function doSleep(s, forced = 0) {
     advance(s, 30, 0.95, 'sleep');
     if (forced ? s.t - t0 >= forced : s.c.fatigue <= 3 && s.t - t0 >= 60) break;
     if (s.c.chill > 85) { why = ' The cold wakes you, shivering hard.'; break; }
-    if (s.c.thirst > 4) { why = ' Thirst wakes you.'; break; }
+    if (s.c.thirst > 2.5) { why = ' Thirst wakes you.'; break; }
   }
   if (!s.dead) say(s, `You sleep for ${fmtTime(s.t - t0)}.${why}`);
   return { ok: true };
@@ -605,7 +605,7 @@ function doExplore(s, cmd) {
 export function travelInfo(s, toId) {
   const a = loc(s), b = s.locs[toId];
   const km = dist(a, b), mass = carriedMass(s);
-  const speed = 4 * (1 - 0.35 * (a.roughness + b.roughness) / 2) * (1 - 0.45 * Math.min(1, mass / MAX_CARRY)) / (1 + condSev(s, 'sprain') / 40) / (isDark(s) ? 1.5 : 1);
+  const speed = 4 * (1 - 0.35 * (a.roughness + b.roughness) / 2) * (1 - 0.45 * Math.min(1, mass / MAX_CARRY)) / (1 + condSev(s, 'sprain') / 40) / (isDark(s) ? 1.5 : 1) / impairment(s).slow;
   return { km, mass, minutes: (km / speed) * 60, met: 3.5 + 2 * Math.min(1, mass / MAX_CARRY), dir: bearing(a, b) };
 }
 
