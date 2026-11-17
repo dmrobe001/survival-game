@@ -176,7 +176,16 @@ export function reach(s) {
 
 export function find(s, id) {
   for (const r of reach(s)) if (r.it.id === id) return r;
+  const trash = trashHere(s);
+  for (const it of trash) if (it.id === id) return { it, list: trash, where: 'trash' };
   return null;
+}
+
+// Things set aside at a place: out of the way of recipes and the stash list,
+// but still there (and still rotting) until you move them back.
+export function trashHere(s) {
+  const L = s.locs[s.at];
+  return L.trash || (L.trash = []);
 }
 
 export function removeFrom(list, it) {

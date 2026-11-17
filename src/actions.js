@@ -16,7 +16,7 @@ import { RESOURCES } from './data/resources.js';
 import { RECIPES, TAG_NAMES, CAP_NAMES } from './data/recipes.js';
 import { genLocation, findStart, prospect, dist, bearing } from './world.js';
 import { kindOf, mk, itemName, label, massOf, contSpec, whyNotHold, roomFor, capOf, addTo, split, reach, find, removeFrom, canMerge,
-  best, here, handsFor, handsUsed, carriedMass, wornIn, missingSlots } from './items.js';
+  best, here, handsFor, handsUsed, carriedMass, wornIn, missingSlots, trashHere } from './items.js';
 import { say, advance, isDark, raining, condSev, footwear } from './sim.js';
 
 export const MAX_CARRY = 35; // kg felt
@@ -645,6 +645,12 @@ function doMove(s, cmd) {
     n = k.hands === 2 ? it.n : Math.min(it.n, free * k.hand + Math.max(0, slack));
     if (k.unit === 'ea') n = Math.floor(n + 1e-9);
     dest = s.c.hands;
+  } else if (cmd.to === 'trash') {
+    if (k.liquid) return { ok: false, msg: 'Pour it out instead.' };
+    if (f.where === 'trash') return { ok: false, msg: 'Already set aside.' };
+    removeFrom(f.list, it);
+    addTo(trashHere(s), it);
+    return { ok: true };
   } else if (cmd.to === 'wear') {
     if (!k.worn) return { ok: false, msg: 'You cannot wear that.' };
     if (wornIn(s, k.worn.slot)) return { ok: false, msg: `You are already wearing something on your ${k.worn.slot}.` };

@@ -104,7 +104,7 @@ export function genLocation(seed, x, y) {
     const cap = def.cap === Infinity ? Infinity : def.cap * Math.min(a, 1.6);
     res[id] = { cap, amt: cap === Infinity ? Infinity : cap * fill, q, known: false, assessed: false };
   }
-  return { x, y, env, name: placeName(env, st), res, items: [], roughness: 0.5 * env.rock + 0.3 * env.elev + 0.2 * env.water };
+  return { x, y, env, name: placeName(env, st), res, items: [], trash: [], roughness: 0.5 * env.rock + 0.3 * env.elev + 0.2 * env.water };
 }
 
 // How good is this place for a resource, 0..~1? Used to score exploration

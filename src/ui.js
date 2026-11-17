@@ -6,7 +6,7 @@ import { esc, fmt, fmtTime, clamp } from './util.js';
 import { KINDS, UNIT, QUALITY_NOTE } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
 import { RECIPES, GROUPS, CAP_NAMES } from './data/recipes.js';
-import { kindOf, itemName, amountText, massOf, contSpec, usedVol, whyNotHold, capsOf, reach, here, handsUsed, handsFor, carriedMass, missingSlots } from './items.js';
+import { kindOf, itemName, amountText, massOf, contSpec, usedVol, whyNotHold, capsOf, reach, here, handsUsed, handsFor, carriedMass, missingSlots, trashHere } from './items.js';
 import { hourOf, dayOf, airTemp, feltTemp, isDark, sleepQuality } from './sim.js';
 import { newGame, act, gatherStatus, recipeStatus, planInput, slotSpec, waterHere, trapsHere, travelInfo, MAX_CARRY } from './actions.js';
 import { dist, bearing } from './world.js';
@@ -407,26 +407,21 @@ const projMeta = (n) => (n.repeat ? (n.ready ? 'now' : 'not now') : n.prog ? `in
 
 function selectedCard(P, rk) {
   const n = rk.sel;
-  let lines = '', doBtn = '';
-  if (n.repeat) {
-    const now = rk.base;
-    lines = `<p class="small">${esc(n.why)}. Now: ${flowText(rk.flow, now)}${rk.how ? ', best by ' + esc(rk.how) : ''}.</p><p class="muted small">Projects below are ranked by how much they would raise that.</p>`;
-    if (n.cmd) doBtn = btn(n.name, n.cmd, { off: !n.ready, cls: 'primary' });
-  } else if (n.recipe) {
-    const r = n.recipe, st = recipeStatus(S, r, ui.choices[r.id] || {});
+  let lines = '', meta = projMeta(n);
+  if (n.repeat) meta = flowText(rk.flow, rk.base);
+  else if (n.recipe) {
+    const st = recipeStatus(S, n.recipe, ui.choices[n.recipe.id] || {});
     lines = '<ul class="reqs">' + st.lines.filter((l) => !l.opt || l.ok).map((l) => {
       const via = l.ok ? null : l.input ? n.reqs.in[l.input] : l.cap ? n.reqs.tool[l.cap] : l.res ? n.reqs.res : null;
-      const vn = via ? P.node(via) : null;
+      const vn = via && P.node(via);
       const link = vn ? (vn.recipe ? ` <button class="link" data-ui="proj+:${via}">› ${esc(vn.name)}</button>` : ` <span class="muted">› ${esc(vn.name.toLowerCase())}</span>`) : '';
       return `<li class="req ${l.ok ? 'ok' : 'no'}">${esc(l.text)}${link}</li>`;
     }).join('') + '</ul>';
-    if (n.prog) doBtn = btn(`Keep working (${fmtTime(Math.min(120, n.prog.proj.left))})`, { t: 'work', id: n.prog.id }, { cls: 'primary' });
-    else doBtn = btn(st.time > 150 && !r.outdoor ? `Start (${fmtTime(st.time)})` : `Do it · ${fmtTime(st.time)}`, { t: 'recipe', id: r.id, choose: ui.choices[r.id] || {} }, { off: !st.ok, cls: 'primary' });
-    lines = lines + `<p class="muted small">${esc(r.desc || '')}</p>`;
   }
-  const back = ui.projBack.length ? uibtn('‹ ' + esc(P.has(ui.projBack[ui.projBack.length - 1]) ? P.node(ui.projBack[ui.projBack.length - 1]).name : REPEAT[ui.projBack[ui.projBack.length - 1]].name), 'projBack', { cls: 'quiet small-btn' }) : '';
-  return `<div class="selcard"><div class="selhead">${back}<span class="item-name">${esc(n.name)}</span><span class="chip ${n.ready ? 'cap' : 'warm'}">${projMeta(n)}</span>
-    <span class="selbtns">${doBtn}${uibtn('×', 'projClear', { cls: 'quiet small-btn' })}</span></div>${lines}</div>`;
+  const prev = ui.projBack[ui.projBack.length - 1];
+  const back = prev ? uibtn('‹', 'projBack', { cls: 'quiet small-btn' }) : '';
+  return `<div class="selcard"><div class="selhead">${back}<div class="seltitle"><span class="item-name">${esc(n.name)}</span><span class="chip ${n.ready ? 'cap' : 'warm'}">${meta}</span></div>
+    ${uibtn('×', 'projClear', { cls: 'quiet small-btn' })}</div>${lines}</div>`;
 }
 
 function projectsPane(P, rk) {
@@ -463,9 +458,9 @@ function stashPane() {
   const L = here(S);
   const loose = L.items.filter((it) => !kindOf(it).fixed && !it.proc).slice().reverse();
   const built = L.items.filter((it) => kindOf(it).fixed || it.proc);
-  return `<section class="pane stash" aria-label="On the ground"><div class="pane-h"><h2>On the ground</h2>${uibtn('Inventory', 'inv', { cls: 'small-btn' })}</div>
+  return `<section class="pane stash" aria-label="Stash"><div class="pane-h"><h2>Stash</h2>${uibtn('Inventory', 'inv', { cls: 'small-btn' })}</div>
     ${built.length ? `<div class="chips built">${built.map(builtChip).join('')}</div>` : ''}
-    <div class="ground" id="ground" data-keep-scroll>${loose.length ? loose.map((it) => `<button class="gitem" data-cmd="${esc(JSON.stringify({ t: 'grab', id: it.id }))}">${esc(itemName(it))} <b>${amountText(it)}</b></button>`).join('') : '<span class="muted small">Nothing here yet.</span>'}</div></section>`;
+    <div class="ground" id="ground" data-keep-scroll>${loose.length ? loose.map((it) => `<span class="gitem"><button class="gtake" data-cmd="${esc(JSON.stringify({ t: 'grab', id: it.id }))}">${esc(itemName(it))} <b>${amountText(it)}</b></button><button class="gx" aria-label="Move ${esc(itemName(it))} to the trash" data-cmd="${esc(JSON.stringify({ t: 'move', id: it.id, to: 'trash' }))}">×</button></span>`).join('') : '<span class="muted small">Nothing here yet.</span>'}</div></section>`;
 }
 
 function handStats(it) {
@@ -533,6 +528,8 @@ function inventoryPane() {
     if (!c || kindOf(it).trap) continue;
     panels.push(invPanel('c' + it.id, itemName(it), `${fmt(usedVol(it))} of ${fmt(c.vol)} L${c.liquid ? `, ${Math.round(c.ret)}% watertight` : c.mesh >= 1 ? `, gaps ${c.mesh} cm` : ''}`, it.in || [], it.id));
   }
+  const trash = trashHere(S);
+  panels.push(invPanel('trash', 'Trash', trash.length ? 'set aside here, out of the stash' : 'nothing set aside', trash, 'trash'));
   panels.push(invPanel('hands', 'In your hands', `${handsUsed(S)} of 2 hands · ${fmt(carriedMass(S))} of ${MAX_CARRY} kg carried`, S.c.hands, 'hands'));
   return `<section class="pane inventory" id="inv" data-keep-scroll><div class="pane-h"><h2>Inventory</h2>${uibtn('Done', 'inv', { cls: 'primary small-btn' })}</div>
     <p class="muted small">Drag the ⠿ handle onto a panel, or onto your hands below, to move as much as fits.</p>${panels.join('')}</section>`;

@@ -241,10 +241,11 @@ function tickWorld(s, h) {
       const r = loc.res[rid], def = RESOURCES[rid];
       if (def.regen && r.amt < r.cap) r.amt = Math.min(r.cap, r.amt + def.regen * (h / 24) * (r.amt + 0.03 * r.cap) * (1 - r.amt / r.cap) * 4);
     }
-    if (!loc.items.length) continue;
+    if (!loc.items.length && !(loc.trash && loc.trash.length)) continue;
     const roofed = siteLevel(loc, 'roof') >= 40;
     const env = { loc, wet: wet0 && !roofed, hearth: siteLevel(loc, 'hearth') > 0, visible: id === s.at };
     tickList(s, loc.items, env, h, false);
+    if (loc.trash && loc.trash.length) tickList(s, loc.trash, env, h, false);
   }
   const loc = here(s);
   const env = { loc, wet: wet0 && siteLevel(loc, 'roof') < 40, hearth: false, visible: true };
