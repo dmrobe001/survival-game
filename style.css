@@ -200,19 +200,20 @@ h2.pane-h small, .pane-h small { text-transform: none; letter-spacing: 0; font-w
 .tasks { flex: 1 1 0; }
 .stash { flex: 0 1 auto; max-height: 24%; }
 .inventory { flex: 1 1 0; overflow-y: auto; }
-.rows { overflow-y: auto; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; overscroll-behavior: contain; }
-.row { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 10px; text-align: left; border: 0; border-bottom: 1px dotted var(--line);
-  border-radius: 0; background: none; padding: 7px 4px; min-height: 40px; font: 500 0.85rem/1.25 var(--sans); color: var(--muted); }
+.rows { overflow-y: auto; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 5px; padding: 2px 1px 4px; overscroll-behavior: contain; }
+.row { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 10px; text-align: left; border: 1px solid var(--line);
+  border-radius: 4px; background: var(--panel); padding: 7px 9px; min-height: 42px; font: 500 0.85rem/1.25 var(--sans); color: var(--muted); }
+.row.ready, .row.task { border-color: var(--ink); }
 .row:hover:not(:disabled) { background: var(--chip); }
 .row-name { min-width: 0; display: flex; flex-direction: column; }
 .row-name small { font: 0.7rem var(--mono); color: var(--muted); }
 .row-meta { flex: 0 0 auto; font: 0.7rem var(--mono); color: var(--muted); text-align: right; max-width: 55%; }
 .row.ready, .row.task { color: var(--ink); }
-.row.helps { color: var(--ink); box-shadow: inset 3px 0 0 var(--accent); padding-left: 9px; }
+.row.helps { color: var(--ink); border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); padding-left: 12px; }
 .row.helps .row-meta { color: var(--accent); }
 .row.dim { opacity: 0.55; }
-.row.front { box-shadow: inset 3px 0 0 var(--accent); padding-left: 9px; }
-.row.first { background: var(--chip); font-weight: 600; }
+.row.front { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); padding-left: 12px; }
+.row.first { background: var(--chip); font-weight: 600; border-width: 2px; }
 .selcard { border: 2px solid var(--ink); background: var(--panel); padding: 8px 10px; margin-bottom: 6px; display: flex; flex-direction: column; gap: 4px; max-height: 46%; overflow-y: auto; flex: 0 0 auto; }
 .selhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
 .selbtns { margin-left: auto; display: flex; gap: 6px; }
