@@ -6,14 +6,15 @@ import { esc, fmt, fmtTime, clamp } from './util.js';
 import { KINDS, UNIT, QUALITY_NOTE } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
 import { RECIPES, GROUPS, CAP_NAMES } from './data/recipes.js';
-import { kindOf, itemName, amountText, massOf, contSpec, usedVol, whyNotHold, capsOf, reach, here, handsUsed, carriedMass, missingSlots } from './items.js';
+import { kindOf, itemName, amountText, massOf, contSpec, usedVol, whyNotHold, capsOf, reach, here, handsUsed, handsFor, carriedMass, missingSlots } from './items.js';
 import { hourOf, dayOf, airTemp, feltTemp, isDark, sleepQuality } from './sim.js';
-import { newGame, act, gatherStatus, recipeStatus, recipeVisible, planInput, slotSpec, waterHere, trapsHere, travelInfo, MAX_CARRY } from './actions.js';
+import { newGame, act, gatherStatus, recipeStatus, planInput, slotSpec, waterHere, trapsHere, travelInfo, MAX_CARRY } from './actions.js';
 import { dist, bearing } from './world.js';
+import { makePlanner } from './plan.js';
 
 const SAVE_KEY = 'foothold-save-v1';
 let S = null;
-const ui = { tab: 'place', view: null, group: 'All', showAll: false, choices: {}, targets: {}, hours: 2, notice: '', busy: false, fast: false, confirmNew: false };
+const ui = { tab: 'plan', sel: null, planFilter: 'all', edges: [], view: null, choices: {}, targets: {}, hours: 2, notice: '', busy: false, fast: false, confirmNew: false };
 
 // ------------------------------------------------------------------ persistence
 // JSON cannot hold Infinity; water sources have infinite abundance.
@@ -83,6 +84,8 @@ function itemRow(it, where, depth, editable) {
   if (it.proc) extra += chip(`ready in ${fmtTime(it.proc.left)}`, 'warm');
   if (it.proj) extra += chip(`${Math.round(100 * (1 - it.proj.left / it.proj.total))}% done`, 'warm');
   if (k.trap) extra += chip(it.q.sprung >= 50 ? 'sprung?' : 'set', 'warm');
+  if (where === 'hands') extra += chip(handsFor(it) === 2 ? 'both hands' : 'one hand', 'cont');
+  else if (where === 'here' && !k.fixed && !k.liquid && depth === 0) extra += chip(k.hands === 2 ? 'needs both hands' : handsFor(it) > 2 ? `${k.unit === 'ea' ? fmt(k.hand) : fmt(k.hand) + UNIT[k.unit]} per hand` : handsFor(it) === 2 ? 'two handfuls' : 'one handful', 'muted');
   let html = `<li class="item" style="--d:${depth}"><div class="item-main"><span class="item-name">${esc(itemName(it))} <b>${amountText(it)}</b></span>` +
     `<span class="chips">${capChips(it)}${contText(it)}${k.trap ? '' : qualChips(it)}${extra}</span></div>` +
     (ctrl.length ? `<div class="ctrl">${ctrl.join('')}</div>` : '') + '</li>';
@@ -208,41 +211,129 @@ function exploreView() {
     <div class="ctrl left go">${btn(`Explore for ${ui.hours} h${chosen.length ? ', looking for ' + chosen.length + ' thing' + (chosen.length > 1 ? 's' : '') : ''}`, { t: 'explore', hours: ui.hours, targets: chosen }, { cls: 'primary' })}</div></section>`;
 }
 
-// ------------------------------------------------------------------ make tab
-function recipeCard(r, st) {
-  const ch = ui.choices[r.id] || {};
-  const lines = st.lines.map((l) => {
-    let sel = '';
-    if (l.input && l.plan.cands.length > 1) {
-      sel = `<select data-choose="${r.id}:${l.input}" aria-label="Choose which to use"><option value="">best available</option>${l.plan.cands.map((c) => `<option value="${c.id}" ${String(ch[l.input]) === String(c.id) ? 'selected' : ''}>${esc(itemName(c))} ${amountText(c)} ${briefQ(c)}</option>`).join('')}</select>`;
+// ------------------------------------------------------------------ plan tab: the web of actions
+// Columns are time until you could have it done, counting everything you
+// would have to do first. Rows are kinds of work.
+const BUCKETS = [[15, 'within 15 min'], [60, 'within 1 h'], [180, 'within 3 h'], [480, 'within 8 h'], [1440, 'within a day'], [Infinity, 'days']];
+const bucketOf = (n) => (isFinite(n.total) ? BUCKETS.findIndex((b) => n.total <= b[0]) : BUCKETS.length);
+const away = (n) => (!isFinite(n.total) ? 'no known route' : n.ready ? fmtTime(n.total) : `~${fmtTime(n.total)}`);
+
+function stepCmd(n) {
+  if (n.recipe) return { t: 'recipe', id: n.recipe.id, choose: ui.choices[n.recipe.id] || {} };
+  const rid = n.key.slice(2);
+  if (n.w.mode === 'here') return { t: 'gather', rid, min: 30 };
+  if (n.w.mode === 'goto') return { t: 'travel', to: n.w.to };
+  return { t: 'explore', hours: n.w.hours, targets: [rid] };
+}
+const stepLabel = (n) => (n.recipe ? n.name : n.w.mode === 'search' ? `Explore ${n.w.hours} h for ${n.res.name.toLowerCase()}` : n.name);
+const goalBox = (n) => `<label class="check goal"><input type="checkbox" id="goal-${n.key}" data-ui="goal:${n.key}" ${S.goals[n.key] ? 'checked' : ''}> Goal</label>`;
+const jump = (key, text) => `<button class="link" data-ui="sel:${key}">${text}</button>`;
+
+function detail(P, n) {
+  let body = '', act1 = '';
+  if (n.recipe) {
+    const r = n.recipe, st = recipeStatus(S, r, ui.choices[r.id] || {}), ch = ui.choices[r.id] || {};
+    const lines = st.lines.map((l) => {
+      let sel = '';
+      if (l.input && l.plan.cands.length > 1) sel = `<select data-choose="${r.id}:${l.input}" aria-label="Choose which to use"><option value="">best available</option>${l.plan.cands.map((c) => `<option value="${c.id}" ${String(ch[l.input]) === String(c.id) ? 'selected' : ''}>${esc(itemName(c))} ${amountText(c)} ${briefQ(c)}</option>`).join('')}</select>`;
+      const using = l.input && l.plan.ok && !sel ? ` <span class="muted">using ${esc(itemName(l.plan.first))} ${briefQ(l.plan.first)}</span>` : '';
+      const via = l.ok ? null : l.input ? n.reqs.in[l.input] : l.cap ? n.reqs.tool[l.cap] : l.res ? n.reqs.res : null;
+      const how = via ? ` ${jump(via, '› ' + esc(P.node(via).name) + ' (' + away(P.node(via)) + ')')}` : '';
+      return `<li class="req ${l.ok ? 'ok' : l.opt ? 'opt' : 'no'}">${esc(l.text)}${using}${sel}${how}</li>`;
+    }).join('');
+    const batch = st.k > 1.01 ? ` ×${fmt(st.k)}` : '';
+    act1 = btn(st.time > 150 && !r.outdoor ? `Start (${fmtTime(st.time)} in all)` : `Do it${batch}: ${fmtTime(st.time)}`, { t: 'recipe', id: r.id, choose: ch }, { off: !st.ok, cls: 'primary' });
+    body = `<p class="muted small">${esc(r.desc || '')}</p><ul class="reqs">${lines}</ul>`;
+  } else {
+    const rid = n.key.slice(2), def = n.res, l = here(S);
+    const places = Object.values(S.locs).filter((p) => p.id !== S.at && p.res[rid] && p.res[rid].known);
+    let how = '';
+    if (n.w.mode === 'here') {
+      if (n.gs) {
+        const unit = UNIT[KINDS[def.gather.kind].unit];
+        act1 = btn('Collect for 30 min', { t: 'gather', rid, min: 30 }, { off: !n.gs.ok, cls: 'primary' }) + btn('2 h', { t: 'gather', rid, min: 120 }, { off: !n.gs.ok });
+        how = `<ul class="reqs"><li class="req ok">here, at ${fmt(n.gs.rate)}${unit}/h</li>${n.gs.lines.map((x) => { const via = !x.ok && !x.opt && def.gather.tool ? n.reqs.tool[def.gather.tool.cap] : null; return `<li class="req ${x.ok ? 'ok' : x.opt ? 'opt' : 'no'}">${esc(x.text)}${via ? ' ' + jump(via, '› ' + esc(P.node(via).name) + ' (' + away(P.node(via)) + ')') : ''}</li>`; }).join('')}</ul>`;
+      } else how = '<p class="req ok">Present at this place.</p>';
+    } else if (n.w.mode === 'search') {
+      act1 = btn(`Explore ${n.w.hours} h for it`, { t: 'explore', hours: n.w.hours, targets: [rid] }, { cls: 'primary' }) + (l.surveys < 3 ? btn('Search this place first (45 min)', { t: 'survey' }) : '');
+      how = `<p class="muted small">You have not seen this anywhere yet. In country like this, a ${n.w.hours} h trip looking for it succeeds about ${Math.round(n.w.p * 100)} times in 100, so expect roughly ${fmtTime(n.w.m)} including the walk there. It could be the first trip or the sixth.${l.surveys < 3 ? ' It may also be here, unnoticed.' : ''}</p>`;
     }
-    const using = l.input && l.plan.ok && !sel ? ` <span class="muted">using ${esc(itemName(l.plan.first))} ${briefQ(l.plan.first)}</span>` : '';
-    return `<li class="req ${l.ok ? 'ok' : l.opt ? 'opt' : 'no'}">${esc(l.text)}${using}${sel}</li>`;
-  }).join('');
-  const batch = st.k > 1.01 ? ` ×${fmt(st.k)}` : '';
-  return `<li class="recipe ${st.ok ? '' : 'blocked'}"><div class="recipe-head"><span class="item-name">${esc(r.name)}${batch}</span>
-    ${btn(st.time > 150 && !r.outdoor ? `Start (${fmtTime(st.time)} in all)` : fmtTime(st.time), { t: 'recipe', id: r.id, choose: ch }, { off: !st.ok, cls: 'primary' })}</div>
-    <p class="muted small">${esc(r.desc || '')}</p><ul class="reqs">${lines}</ul></li>`;
+    const walks = places.map((p) => { const info = travelInfo(S, p.id); return btn(`Walk to ${esc(p.name.toLowerCase())}: ${fmt(info.km)} km, ${fmtTime(info.minutes)}`, { t: 'travel', to: p.id }, { cls: n.w.to === p.id ? 'primary' : '' }); }).join('');
+    body = `${def.note ? `<p class="muted small">${esc(def.note)}</p>` : ''}${how}${walks ? `<div class="ctrl left wrap">${walks}</div>` : ''}`;
+  }
+  const chain = n.steps.length > 1 ? `<div class="chain"><span class="muted small">Route:</span>${n.steps.map((st) => { const m = P.node(st.key); return `<button class="node ${m.ready ? 'ready' : ''} ${st.key === n.key ? 'sel' : ''}" data-ui="sel:${st.key}">${esc(stepLabel(m))}${st.times > 1 ? ' ×' + st.times : ''} <small>${fmtTime(st.minutes + st.wait)}${st.wait ? ' incl. waiting' : ''}</small></button>`; }).join('<span class="chev">›</span>')}</div>` : '';
+  const head = n.ready ? (n.passive ? 'Here' : 'Ready now') : isFinite(n.total) ? `About ${fmtTime(n.total)} away, ${n.away} step${n.away === 1 ? '' : 's'} first` : 'No known route right now';
+  return `<section class="detail" id="detail"><div class="recipe-head"><div><span class="item-name">${esc(n.name)}</span> <span class="chip ${n.ready ? 'cap' : 'warm'}">${head}</span></div>
+    <div class="ctrl">${goalBox(n)}${act1}${uibtn('Close', 'sel:', { cls: 'quiet' })}</div></div>${body}${chain}</section>`;
 }
 
-function makeTab() {
-  const shown = {};
-  let hidden = 0;
-  for (const id in RECIPES) {
-    const r = RECIPES[id], st = recipeStatus(S, r, ui.choices[id] || {});
-    if (ui.showAll || recipeVisible(S, r, st)) (shown[r.group] = shown[r.group] || []).push([r, st]); else hidden++;
+function planTab() {
+  const P = makePlanner(S);
+  for (const k in S.goals) if (!S.goals[k] || !P.has(k)) delete S.goals[k];
+  const goals = Object.keys(S.goals);
+  const support = new Set(), next = [];
+  for (const g of goals) for (const st of P.node(g).steps) {
+    if (st.key !== g) support.add(st.key);
+    const m = P.node(st.key);
+    if (m.ready && !m.passive && !next.includes(st.key)) next.push(st.key);
   }
-  const groups = GROUPS.filter((g) => shown[g]);
-  if (ui.group !== 'All' && !shown[ui.group]) ui.group = 'All';
-  const chips = ['All'].concat(groups).map((g) => uibtn(g === 'All' ? 'All' : `${g} <small>${shown[g].filter((x) => x[1].ok).length}/${shown[g].length}</small>`, 'group:' + g, { on: ui.group === g })).join('');
-  const body = groups.filter((g) => ui.group === 'All' || ui.group === g).map((g) => {
-    const list = shown[g].slice().sort((a, b) => b[1].ok - a[1].ok);
-    return `<section><h3>${g}</h3><ul class="recipes">${list.map(([r, st]) => recipeCard(r, st)).join('')}</ul></section>`;
-  }).join('');
-  return `<nav class="subtabs" aria-label="Kinds of work">${chips}</nav>
-    <p class="muted">You know how to do everything. Techniques appear here once you hold roughly half of what they need.
-    <label class="check"><input type="checkbox" id="show-all" data-ui="showAll" ${ui.showAll ? 'checked' : ''}> Show all ${hidden + Object.values(shown).reduce((a, l) => a + l.length, 0)} techniques</label></p>
-    ${body || '<p class="muted">Nothing to make yet. Gather some materials: stones, sticks, fiber.</p>'}`;
+  const sel = ui.sel && P.has(ui.sel) ? P.node(ui.sel) : null;
+  const inRoute = new Set(sel ? sel.steps.map((s) => s.key) : []);
+  ui.edges = [];
+  for (const n of sel ? [sel] : goals.map(P.node)) for (const st of n.steps) for (const f of st.for) ui.edges.push([st.key, f]);
+
+  const rows = ['Collect and find'].concat(GROUPS);
+  const cols = BUCKETS.map((b) => b[1]).concat(['no known route']);
+  const cells = {};
+  let count = 0;
+  for (const key of P.keys) {
+    const n = P.node(key);
+    if (ui.planFilter === 'ready' && !n.ready) continue;
+    if (ui.planFilter === 'goals' && !S.goals[key] && !support.has(key)) continue;
+    if (n.passive && ui.planFilter !== 'all') continue;
+    count++;
+    (cells[bucketOf(n) + '|' + n.group] = cells[bucketOf(n) + '|' + n.group] || []).push(n);
+  }
+  const chipFor = (n) => `<button class="node ${n.ready ? 'ready' : ''} ${S.goals[n.key] ? 'goal' : support.has(n.key) ? 'support' : ''} ${sel && sel.key === n.key ? 'sel' : inRoute.has(n.key) ? 'route' : ''}" data-ui="sel:${n.key}" data-key="${n.key}">${esc(n.name)} <small>${n.passive ? 'here' : n.ready ? fmtTime(n.total) : isFinite(n.total) ? n.away + (n.away === 1 ? ' step' : ' steps') : ''}</small></button>`;
+  let grid = '<div class="corner"></div>' + rows.map((g, r) => `<div class="rowhead" style="grid-row:${r + 2}">${g}</div>`).join('');
+  cols.forEach((c, ci) => {
+    grid += `<div class="colhead" style="grid-column:${ci + 2}">${c}</div>`;
+    rows.forEach((g, r) => {
+      const list = (cells[ci + '|' + g] || []).sort((a, b) => a.total - b.total);
+      grid += `<div class="cell ${list.length ? '' : 'empty'}" style="grid-column:${ci + 2};grid-row:${r + 2}" data-row="${esc(g)}">${list.map(chipFor).join('')}</div>`;
+    });
+  });
+  const nextHtml = goals.length
+    ? `<section class="next"><h3>Toward your goals <small>${goals.map((g) => esc(P.node(g).name) + ' (' + away(P.node(g)) + ')').join(' · ')}</small></h3>
+        ${next.length ? `<ul class="items">${next.map((k) => { const m = P.node(k); return `<li class="item"><div class="item-main">${jump(k, esc(stepLabel(m)))}</div><div class="ctrl">${btn(m.recipe ? fmtTime(m.st.time) : m.w.mode === 'here' ? '30 min' : fmtTime(m.w.mode === 'goto' ? m.w.m : m.w.hours * 60), stepCmd(m), { cls: 'primary' })}</div></li>`; }).join('')}</ul>` : '<p class="muted">Nothing you can do toward these right now.</p>'}</section>`
+    : '<p class="muted">Pick any action below to see what it needs and the quickest route to it. Tick <b>Goal</b> on the ones you are working toward and the steps that lead there are marked, with the ones you can do right now listed here.</p>';
+  const filters = [['all', 'Everything'], ['ready', 'Can do now'], ['goals', 'Toward goals']].map(([k, t]) => uibtn(t, 'planFilter:' + k, { on: ui.planFilter === k })).join('');
+  return `${nextHtml}${sel ? detail(P, sel) : ''}
+    <nav class="subtabs" aria-label="Filter actions">${filters}<span class="muted small legend"><span class="node ready">can do now</span><span class="node">needs steps first</span><span class="node support">leads to a goal</span><span class="node goal">goal</span></span></nav>
+    <div class="webwrap" id="webwrap"><div class="web" id="web" style="--rows:${rows.length}">${grid}<svg id="edges" aria-hidden="true"><defs><marker id="chev" viewBox="0 0 8 8" markerWidth="9" markerHeight="9" refX="4" refY="4" orient="auto"><path d="M1.5 1 L5.5 4 L1.5 7" fill="none" stroke-width="1.6"/></marker></defs></svg></div></div>
+    <p class="muted small">${count} actions. Times count everything you would have to do first, one thing after another, by the quickest route you know of; searches are averages.</p>`;
+}
+
+// Draw the selected action's dependencies as lines of chevrons between chips.
+function drawEdges() {
+  const svg = document.getElementById('edges'), web = document.getElementById('web');
+  if (!svg || !web) return;
+  const box = web.getBoundingClientRect();
+  svg.setAttribute('width', web.scrollWidth); svg.setAttribute('height', web.scrollHeight);
+  let out = '';
+  for (const [a, b] of ui.edges || []) {
+    const ea = web.querySelector(`[data-key="${a}"]`), eb = web.querySelector(`[data-key="${b}"]`);
+    if (!ea || !eb) continue;
+    const ra = ea.getBoundingClientRect(), rb = eb.getBoundingClientRect();
+    const forward = rb.left > ra.right + 8;
+    const x1 = (forward ? ra.right : ra.left + ra.width / 2) - box.left, y1 = ra.top + ra.height / 2 - box.top + (forward ? 0 : (rb.top > ra.top ? ra.height / 2 : -ra.height / 2));
+    const x2 = (forward ? rb.left : rb.left + rb.width / 2) - box.left, y2 = rb.top + rb.height / 2 - box.top + (forward ? 0 : (rb.top > ra.top ? -rb.height / 2 : rb.height / 2));
+    const len = Math.hypot(x2 - x1, y2 - y1), n = Math.max(2, Math.round(len / 16));
+    const pts = [];
+    for (let i = 0; i <= n; i++) pts.push(`${(x1 + ((x2 - x1) * i) / n).toFixed(1)},${(y1 + ((y2 - y1) * i) / n).toFixed(1)}`);
+    out += `<polyline points="${pts.join(' ')}" marker-mid="url(#chev)"/>`;
+  }
+  svg.insertAdjacentHTML('beforeend', out);
 }
 
 // ------------------------------------------------------------------ self tab
@@ -272,6 +363,7 @@ function guideTab() {
     <p><b>Made things have parts.</b> An axe is a head, a haft, a binding and maybe glue, each wearing out in its own way. When a part fails the tool stops working until you fit a replacement from its entry in a list.</p>
     <p><b>A place only has what it has.</b> What you take grows back slowly or not at all. Search a place to find what is hidden; explore to find better country.</p>
     <p><b>You carry two hands' worth.</b> Baskets, bags, frames and a travois extend that, and can be nested. A net will not hold berries, but it will hold a bag of them.</p>
+    <p><b>The Plan tab is a map of what is possible.</b> Further right means further off. Pick an action to see its requirements and the quickest route you know of; click an unmet requirement to jump to whatever supplies it. Tick Goal on what you are after and the steps toward it are marked.</p>
     <p><b>First day:</b> find water, pick up cobbles, look for stone that flakes, cut a sapling, twist cord, and get a fire and a bed together before dark.</p></section>
     <section><h3>This world</h3><p>Seed <code>${esc(S.seed)}</code>. The same seed always grows the same country.</p>
     <div class="ctrl left wrap"><input id="seed-input" type="text" maxlength="24" placeholder="seed for a new world" aria-label="Seed for a new world">
@@ -288,7 +380,7 @@ function logView() {
 
 function render() {
   const app = document.getElementById('app');
-  const TABS = { place: ['Places', placeTab], make: ['Make', makeTab], self: ['Self', selfTab], guide: ['Guide', guideTab] };
+  const TABS = { plan: ['Plan', planTab], place: ['Places', placeTab], self: ['Self', selfTab], guide: ['Guide', guideTab] };
   let main;
   if (S.dead) {
     main = `<section class="dead"><h2>You lasted ${dayOf(S) - 1} days.</h2><p>${{ thirst: 'Thirst', starvation: 'Starvation', exposure: 'Cold', injury: 'Injury and sickness' }[S.dead.cause]} ended it at ${esc(here(S).name.toLowerCase())}.</p>
@@ -296,9 +388,13 @@ function render() {
   } else {
     main = `<nav class="tabs" aria-label="Sections">${Object.keys(TABS).map((t) => uibtn(TABS[t][0], 'tab:' + t, { on: ui.tab === t })).join('')}</nav><div class="panel">${TABS[ui.tab][1]()}</div>`;
   }
-  const y = window.scrollY;
+  const y = window.scrollY, wrap = document.getElementById('webwrap'), x = wrap ? wrap.scrollLeft : 0;
   app.innerHTML = `${header()}<div class="cols"><main>${main}</main>${logView()}</div>`;
+  const wrap2 = document.getElementById('webwrap');
+  if (wrap2) wrap2.scrollLeft = x;
   window.scrollTo(0, y);
+  drawEdges();
+  if (ui.reveal) { ui.reveal = false; const d = document.getElementById('detail'); if (d) d.scrollIntoView({ block: 'nearest' }); }
 }
 
 // ------------------------------------------------------------------ input
@@ -309,6 +405,7 @@ function run(cmd) {
   ui.notice = res.ok ? '' : res.msg || '';
   ui.fresh = S.log.length - n0;
   if (res.found) ui.view = res.found;
+  if (cmd.t === 'recipe' && res.ok) delete S.goals['r.' + cmd.id];
   if (cmd.t === 'travel' && res.ok) ui.view = S.at;
   save();
   const elapsed = S.t - t0;
@@ -326,18 +423,19 @@ function run(cmd) {
 
 function start(seed) {
   S = newGame(seed || randomSeed());
-  Object.assign(ui, { tab: 'place', view: null, choices: {}, targets: {}, notice: '', confirmNew: false, fresh: 0 });
+  Object.assign(ui, { tab: 'plan', sel: null, view: null, choices: {}, targets: {}, notice: '', confirmNew: false, fresh: 0 });
   save(); render();
 }
 
 function uiAction(a, el) {
-  const [k, v] = a.split(':');
+  const i = a.indexOf(':'), k = i < 0 ? a : a.slice(0, i), v = i < 0 ? '' : a.slice(i + 1);
   if (k === 'tab') ui.tab = v;
+  else if (k === 'sel') { ui.sel = v || null; ui.tab = 'plan'; ui.reveal = !!v; }
+  else if (k === 'planFilter') ui.planFilter = v;
+  else if (k === 'goal') { if (el.checked) S.goals[v] = 1; else delete S.goals[v]; save(); }
   else if (k === 'view') ui.view = v;
-  else if (k === 'group') ui.group = v;
   else if (k === 'target') ui.targets[v] = !ui.targets[v];
   else if (k === 'hours') ui.hours = Number(v);
-  else if (k === 'showAll') ui.showAll = el.checked;
   else if (k === 'fast') ui.fast = el.checked;
   else if (k === 'new') { ui.seedDraft = (document.getElementById('seed-input') || {}).value || ''; ui.confirmNew = true; }
   else if (k === 'cancelNew') ui.confirmNew = false;
@@ -350,6 +448,7 @@ function uiAction(a, el) {
 export function boot(saved) {
   S = saved || load();
   if (S && S.v !== 1) S = null;
+  if (S && !S.goals) S.goals = {};
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-cmd],[data-ui]');
     if (!el || el.disabled || ui.busy || el.tagName === 'INPUT') return;

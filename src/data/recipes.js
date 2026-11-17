@@ -123,13 +123,11 @@ R({ id: 'light_fire', name: 'Light a fire by friction', group: 'Fire', time: 20,
   make: (c) => { c.give('fire', 1, { fuel: 0.4 }); c.say('The coal catches. Flame climbs through the kindling. You have fire.', 'good'); } });
 R({ id: 'rekindle', name: 'Rekindle from embers', group: 'Fire', time: 5, met: 2,
   desc: 'Blow the banked coals back to life.',
-  in: [{ id: 'kindling', kind: 'kindling', n: 0.3 }],
-  check: (s, a) => (a.hasKind('embers') ? null : 'There are no live embers here.'),
+  tools: [{ cap: 'embers', min: 1 }], in: [{ id: 'kindling', kind: 'kindling', n: 0.3 }],
   make: (c) => { c.removeKind('embers'); c.give('fire', 1, { fuel: 0.3 }); } });
 R({ id: 'add_fuel', name: 'Feed the fire', group: 'Fire', time: 3, met: 2, flat: true,
   desc: 'Each kilogram of dry wood burns for roughly 25 minutes; wet wood for much less.',
-  in: [{ id: 'fuel', tag: 'fuel', kg: 2, max: 12, prefer: 'dryness' }], scale: 'fuel',
-  check: (s, a) => (a.hasKind('fire') ? null : 'There is no fire to feed.'),
+  tools: [{ cap: 'fire', min: 1 }], in: [{ id: 'fuel', tag: 'fuel', kg: 2, max: 12, prefer: 'dryness' }], scale: 'fuel',
   make: (c) => {
     const f = c.ins.fuel, fire = c.findKind('fire');
     if (!fire) { c.give(f.kind, f.n, f.q); c.say('The fire died before you could feed it.', 'warn'); return; }
@@ -344,5 +342,5 @@ export const CAP_NAMES = {
   pound: 'hammer', cut: 'cutting edge', chop: 'chopping edge', scrape: 'scraper', pierce: 'piercer', dig: 'digging tool', grind: 'grinding surface',
   billet: 'soft hammer', spindle: 'fire spindle', fireboard: 'hearth board', fire: 'lit fire', boil: 'boiling setup', bag: 'fine container',
   vessel: 'watertight vessel', rack: 'drying rack', oven: 'earth oven', kiln: 'kiln', hunt: 'hunting weapon', fishspear: 'fish spear', line: 'hook and line',
-  shelter: 'shelter', roof: 'roof', bed: 'bed', hearth: 'hearth', well: 'well',
+  embers: 'live embers', shelter: 'shelter', roof: 'roof', bed: 'bed', hearth: 'hearth', well: 'well',
 };

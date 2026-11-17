@@ -51,6 +51,28 @@ Stacking targets dilutes the search for a statistical reason rather than an
 imposed penalty: the maximum of N draws of a mean of k roughly independent
 values sits about 1/sqrt(k) as far into the tail as the maximum for one.
 
+## The planner (Plan tab)
+
+Requirements form an AND/OR graph: an action needs all of its tools, inputs
+and resources; each of those can be supplied by any of several providers
+(gather here, walk to a known place, search for a new one, or another
+recipe). `src/plan.js` picks the cheapest provider by estimated minutes,
+recursively, and returns the ordered steps. Policies:
+
+- Times add up rather than taking the maximum, because one person works one
+  thing at a time.
+- It only uses what the character knows. A resource not yet seen is priced
+  as a search, using the success rate of the game's own exploration
+  procedure replayed from 40 random origins in this world. That is the
+  character's "background knowledge" of how common things are; real searches
+  scatter around the average.
+- What each recipe produces is discovered by running its `make` function
+  against a recording stand-in, so new recipes need no extra annotation.
+
+The web lays actions out by total time (columns) and kind of work (rows).
+Goals mark every step on their route; the steps you can do now are listed at
+the top.
+
 ## Time
 
 Every action calls `advance(minutes, met, mode)`, which steps in 15-minute

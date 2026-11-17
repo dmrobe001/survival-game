@@ -35,7 +35,7 @@ export function newGame(seed) {
   const s = {
     v: 1, seed, rng: stream('play|' + seed), t: 8 * 60, nextId: 1, nextLoc: 1, at: null, locs: {},
     c: { stomach: 300, glyc: 1500, fat: 60000, thirst: 0.3, fatigue: 10, chill: 0, health: 100, cond: [], hands: [], worn: [] },
-    weather: { kind: 'clear', dT: 1, until: 8 * 60 + 300 }, log: [], seen: {}, dead: null,
+    weather: { kind: 'clear', dT: 1, until: 8 * 60 + 300 }, log: [], seen: {}, goals: {}, dead: null,
   };
   const start = addLocation(s, findStart(seed), ['water', 'deadwood']);
   s.at = start.id; s.home = start.id;
@@ -229,13 +229,13 @@ export function recipeStatus(s, r, choose = {}) {
     const good = b.level >= t.min;
     if (!t.opt && !good) ok = false;
     const have = b.level > 0 && b.it ? `${itemName(b.it)}${t.cap === 'boil' || t.cap === 'fire' ? '' : ': ' + Math.round(b.level)}` : b.why || 'none';
-    lines.push({ ok: good, opt: !!t.opt, text: `${t.opt ? 'helps: ' : ''}${CAP_NAMES[t.cap] || t.cap}${t.min > 1 ? ' ' + t.min + '+' : ''} (${have})` });
+    lines.push({ ok: good, opt: !!t.opt, cap: t.cap, text: `${t.opt ? 'helps: ' : ''}${CAP_NAMES[t.cap] || t.cap}${t.min > 1 ? ' ' + t.min + '+' : ''} (${have})` });
   }
   if (r.res) {
     const res = loc(s).res[r.res];
     const good = !!(res && res.known);
     if (!good) ok = false;
-    lines.push({ ok: good, text: `${RESOURCES[r.res].name.toLowerCase()} at this place` });
+    lines.push({ ok: good, res: r.res, text: `${RESOURCES[r.res].name.toLowerCase()} at this place` });
   }
   for (const spec of r.in) {
     let max = 0;

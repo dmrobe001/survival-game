@@ -6,6 +6,7 @@ import { KINDS } from '../src/data/items.js';
 import { RESOURCES } from '../src/data/resources.js';
 import { reach, here, best, label } from '../src/items.js';
 import { dayOf, hourOf } from '../src/sim.js';
+import { makePlanner } from '../src/plan.js';
 
 let failures = 0;
 const check = (cond, msg) => { if (!cond) { failures++; console.log('  FAIL:', msg); } };
@@ -29,6 +30,15 @@ const a = newGame(seed), b = newGame(seed);
 for (const s of [a, b]) { act(s, { t: 'survey' }); act(s, { t: 'explore', hours: 2, targets: ['toolstone'] }); act(s, { t: 'gather', rid: 'deadwood', min: 30 }); }
 check(JSON.stringify(a) === JSON.stringify(b), 'same seed + same commands must give identical state');
 check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'state must survive a JSON round trip');
+
+// --- the planner: every action gets a route, and a fresh character can reach most of them
+{
+  const P = makePlanner(a);
+  const nodes = P.keys.map(P.node);
+  const lost = nodes.filter((n) => !isFinite(n.total)).map((n) => n.key);
+  check(lost.length <= 3, 'planner finds no route to: ' + lost.join(', '));
+  check(nodes.every((n) => n.steps.length && n.steps[n.steps.length - 1].key === n.key), 'every plan ends with its own action');
+}
 
 // --- a greedy bot: tries to stay alive and make everything it can
 const s = newGame(seed);

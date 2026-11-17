@@ -83,7 +83,7 @@ K('cobble', { name: 'cobble', mass: 0.8, vol: 0.4, grain: 9, tags: ['cobble'],
   q: { hardness: 60, thermal: 60, integrity: 100 },
   caps: { pound: (it) => 0.9 * Q(it, 'hardness') * sound(it, 20), hunt: () => 12 }, wear: { pound: { _: { integrity: 3 } } } });
 K('toolstone', { name: 'toolstone nodule', mass: 1.2, vol: 0.5, grain: 10, q: { knappability: 50 } });
-K('flake', { name: 'stone flake', mass: 0.03, vol: 0.01, grain: 3, hand: 12, tags: ['blade'],
+K('flake', { name: 'stone flake', mass: 0.03, vol: 0.01, grain: 3, hand: 3, tags: ['blade'],
   q: { sharpness: 60, integrity: 100 },
   caps: { cut: (it) => 0.85 * Q(it, 'sharpness'), scrape: (it) => 0.6 * Q(it, 'sharpness'), pierce: (it) => 0.3 * Q(it, 'sharpness') },
   wear: { cut: { _: { sharpness: 6 } }, scrape: { _: { sharpness: 4 } }, pierce: { _: { sharpness: 6 } } } });
@@ -94,7 +94,7 @@ K('biface', { name: 'hand axe', mass: 0.5, vol: 0.2, grain: 12, tags: ['blade', 
 K('celt', { name: 'ground stone axe head', mass: 0.6, vol: 0.2, grain: 12, tags: ['axehead', 'edge'],
   q: { sharpness: 50, integrity: 100 },
   caps: { chop: (it) => 0.4 * Q(it, 'sharpness'), cut: (it) => 0.3 * Q(it, 'sharpness') }, wear: { chop: { _: { sharpness: 2 } }, cut: { _: { sharpness: 2 } } } });
-K('point', { name: 'stone point', mass: 0.03, vol: 0.01, grain: 4, hand: 6, tags: ['point', 'edge'],
+K('point', { name: 'stone point', mass: 0.03, vol: 0.01, grain: 4, hand: 2, tags: ['point', 'edge'],
   q: { sharpness: 60, integrity: 100 }, caps: { pierce: (it) => 0.7 * Q(it, 'sharpness'), cut: (it) => 0.5 * Q(it, 'sharpness') },
   wear: { pierce: { _: { sharpness: 5 } }, cut: { _: { sharpness: 6 } } } });
 K('slab', { name: 'stone slab', mass: 6, vol: 3, grain: 30, hands: 2, q: { hardness: 60, integrity: 100 },
@@ -322,7 +322,7 @@ K('hide_basin', { name: 'hide-lined basin pit', fixed: true, slots: { lining: { 
   build: { group: 'Containers', time: 60, met: 4.5, tools: [{ cap: 'dig', min: 25 }], desc: 'A pit lined with a hide pegged around the rim.' } });
 
 K('fire', { name: 'fire', fixed: true, q: { fuel: 0.5 }, caps: { fire: () => 60 } });
-K('embers', { name: 'bed of embers', fixed: true, q: { heat: 3 } });
+K('embers', { name: 'bed of embers', fixed: true, q: { heat: 3 }, caps: { embers: () => 100 } });
 K('charcoal_mound', { name: 'charcoal mound (burning)', fixed: true });
 K('project', { name: 'unfinished work', fixed: true });
 
