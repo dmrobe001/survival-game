@@ -1,0 +1,12 @@
+{
+  "name": "survival-game",
+  "version": "0.1.0",
+  "description": "A text-and-menus incremental game about realistic survival from nothing.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node test/smoke.mjs test-1 && node test/smoke.mjs test-2 && node test/smoke.mjs test-3",
+    "build": "node tools/bundle.mjs",
+    "serve": "python3 -m http.server 8000"
+  }
+}
