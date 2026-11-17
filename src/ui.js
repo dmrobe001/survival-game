@@ -442,7 +442,8 @@ function projectsPane(P, rk) {
     if (rk.sel && rk.flow) { if (n.gain > 1e-6) { meta = gainText(rk.flow, n.gain) + ' · ' + meta; cls += ' helps'; } else cls += ' dim'; }
     else if (rk.sel) { if (n.saved > 0) { meta = `saves ~${fmtTime(n.saved)} · ` + meta; cls += ' helps'; } else cls += ' dim'; }
     if (!isFinite(n.total)) cls += ' dim';
-    return `<li><button class="row ${cls}" data-ui="proj:${n.key}"><span class="row-name">${esc(n.name)}</span><span class="row-meta">${meta}</span></button></li>`;
+    const sub = rk.flow && n.gainHow ? `<small>${esc(n.gainHow)}</small>` : '';
+    return `<li><button class="row ${cls}" data-ui="proj:${n.key}"><span class="row-name">${esc(n.name)}${sub}</span><span class="row-meta">${meta}</span></button></li>`;
   }).join('');
   return `<section class="pane projects" aria-label="Projects">
     ${rk.sel ? selectedCard(P, rk) : '<h2 class="pane-h">Projects <small>by time to finish</small></h2>'}

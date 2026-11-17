@@ -7,6 +7,7 @@ import { RESOURCES } from '../src/data/resources.js';
 import { reach, here, best, label } from '../src/items.js';
 import { dayOf, hourOf } from '../src/sim.js';
 import { makePlanner } from '../src/plan.js';
+import { REPEAT, projectList, rankProjects, taskList } from '../src/advice.js';
 
 let failures = 0;
 const check = (cond, msg) => { if (!cond) { failures++; console.log('  FAIL:', msg); } };
@@ -38,6 +39,17 @@ check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'stat
   const lost = nodes.filter((n) => !isFinite(n.total)).map((n) => n.key);
   check(lost.length <= 3, 'planner finds no route to: ' + lost.join(', '));
   check(nodes.every((n) => n.steps.length && n.steps[n.steps.length - 1].key === n.key), 'every plan ends with its own action');
+}
+
+// --- advice: every repeating need can be ranked against every project
+{
+  const P = makePlanner(a);
+  const list = projectList(a, P);
+  for (const key of Object.keys(REPEAT)) {
+    const rk = rankProjects(a, P, list, key);
+    check(rk.rest.every((n) => isFinite(n.gain)), `ranking for ${key} produced a non-number`);
+    taskList(a, P, rk);
+  }
 }
 
 // --- a greedy bot: tries to stay alive and make everything it can

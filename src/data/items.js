@@ -166,7 +166,7 @@ K('bow_drill', { name: 'bow drill', mass: 0, vol: 2, grain: 60,
   build: { group: 'Fire', time: 25, tools: [{ cap: 'cut', min: 15 }], desc: 'The bow does the spinning, a stone socket takes the downward pressure: far more reliable than bare palms, until the cord frays.' } });
 
 // ------------------------------------------------------------ containers and carrying
-K('bark_tray', { name: 'bark tray', mass: 0.6, vol: 3, grain: 50, q: { integrity: 100 }, decay: { integrity: 1.2 },
+K('bark_tray', { name: 'bark tray', open: true, mass: 0.6, vol: 3, grain: 50, q: { integrity: 100 }, decay: { integrity: 1.2 },
   cont: { vol: 6, mesh: 0 } });
 K('bark_basin', { name: 'bark basin', mass: 0.8, vol: 5, grain: 30, tags: ['sealable'],
   q: { size: 4, retention: 60, integrity: 100 }, decay: { integrity: 0.8, retention: 0.8 },

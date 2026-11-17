@@ -33,19 +33,31 @@ export const REPEAT = {
 // capability levels lvl(cap). Counts gathering, small-game hunting and fish
 // spearing; processing (roasting, pounding, leaching) raises the value of
 // what is gathered when you have what it takes.
-function kcalPerUnit(kind, lvl) {
-  const k = KINDS[kind];
-  let v = k.food ? k.food.kcal * (1 - 2 * k.food.risk) : 0;
-  if (k.roast && lvl('fire') >= 1) v = Math.max(v, KINDS[k.roast.to].food.kcal * k.roast.y);
-  if (k.crush && lvl(k.crush.cap) >= k.crush.min) {
-    const out = KINDS[k.crush.to];
-    let c = out.food.kcal * k.crush.y;
-    if (out.q.tannin > 25 && lvl('bag') < 1) c *= 0.5;
-    if (out.roast && lvl('fire') >= 1) c = Math.max(c, KINDS[out.roast.to].food.kcal * out.roast.y * k.crush.y);
-    v = Math.max(v, c);
-  }
-  return v;
+// Ways to turn one unit of a gathered kind into food, each with kcal per
+// unit and hands-on hours per unit (shelling, pounding, baking). Waiting
+// that needs no attention, like leaching overnight, costs nothing here.
+function recipeHours(rid, perUnitOf) {
+  const r = RECIPES[rid];
+  if (!r) return 0;
+  const spec = r.in.find((x) => x.id === 'x');
+  return r.time / 60 / (r.flat ? spec.max : spec.n) * (perUnitOf || 1);
 }
+function foodRoutes(kind, lvl) {
+  const k = KINDS[kind], out = [];
+  if (k.food) out.push({ v: k.food.kcal * (1 - 2 * k.food.risk), h: 0, how: 'raw' });
+  if (k.roast && lvl('fire') >= 1) out.push({ v: KINDS[k.roast.to].food.kcal * k.roast.y, h: recipeHours('roast_' + kind), how: 'roasted' });
+  if (k.crush && lvl(k.crush.cap) >= k.crush.min) {
+    const o = KINDS[k.crush.to], y = k.crush.y;
+    const bitter = o.q.tannin > 25, leached = bitter && lvl('leach') >= 1;
+    const keep = bitter && !leached ? 0.35 : 1; // bitter food: half the energy, and it often makes you sick
+    const h = recipeHours('crush_' + kind) + (leached ? recipeHours('soak_' + k.crush.to, y) : 0);
+    const steps = [k.crush.cap === 'grind' ? 'ground' : 'shelled and pounded'].concat(leached ? ['leached'] : bitter ? ['eaten bitter'] : []);
+    out.push({ v: o.food.kcal * y * keep, h, how: steps.join(', ') });
+    if (o.roast && lvl('fire') >= 1) out.push({ v: KINDS[o.roast.to].food.kcal * o.roast.y * y * keep, h: h + recipeHours('roast_' + k.crush.to, y), how: steps.concat(['baked']).join(', ') });
+  }
+  return out;
+}
+
 // Bag level for picking `kind`: a container you have that holds it, or one
 // that recipe `rid` would make.
 function bagLevel(s, kind, rid) {
@@ -58,17 +70,28 @@ function bagLevel(s, kind, rid) {
   return v;
 }
 
+// Calories per hour of work, collecting and processing, from one resource here.
+function resourceFood(s, rid, lvl, viaRecipe) {
+  const r = here(s).res[rid], g = RESOURCES[rid].gather;
+  if (!r || !r.known || !g || !(KINDS[g.kind].food || KINDS[g.kind].crush)) return null;
+  if (g.tool && lvl(g.tool.cap) < g.tool.min) return null;
+  const bag = g.boost && g.boost.cap === 'bag' ? bagLevel(s, g.kind, viaRecipe) : 0;
+  const boost = g.boost ? (g.boost.cap === 'bag' ? bag : lvl(g.boost.cap)) : 0;
+  const rate = g.rate * Math.sqrt(clamp(r.amt / r.cap, 0, 1)) * (g.boost ? 1 + boost / g.boost.per : 1);
+  let top = null;
+  for (const o of foodRoutes(g.kind, lvl)) {
+    const v = o.v / (1 / Math.max(rate, 1e-6) + o.h);
+    if (!top || v > top.v) top = { v, how: `${KINDS[g.kind].name}, ${o.how}${bag > 0 ? ', picked into a container' : ''}` };
+  }
+  return top;
+}
+
 function foodRate(s, lvl, rid) {
   const L = here(s);
   let top = 0, how = '';
-  for (const rid in L.res) {
-    const r = L.res[rid], g = RESOURCES[rid].gather;
-    if (!r.known || !g || !(KINDS[g.kind].food || KINDS[g.kind].crush)) continue;
-    if (g.tool && lvl(g.tool.cap) < g.tool.min) continue;
-    const boost = g.boost ? (g.boost.cap === 'bag' ? bagLevel(s, g.kind, rid) : lvl(g.boost.cap)) : 0;
-    const rate = g.rate * Math.sqrt(clamp(r.amt / r.cap, 0, 1)) * (g.boost ? 1 + boost / g.boost.per : 1);
-    const v = rate * kcalPerUnit(g.kind, lvl);
-    if (v > top) { top = v; how = 'collecting ' + KINDS[g.kind].name; }
+  for (const res in L.res) {
+    const f = resourceFood(s, res, lvl, rid);
+    if (f && f.v > top) { top = f.v; how = f.how; }
   }
   const game = (rid) => (L.res[rid] && L.res[rid].known ? clamp(L.res[rid].amt / RESOURCES[rid].cap, 0, 1) : 0);
   if (lvl('hunt') >= 10 && game('small_game')) {
@@ -115,6 +138,14 @@ export function flowGain(s, flow, rid, base) {
   if (!Object.keys(extra).length && !outputsOf(rid).some((k) => KINDS[k].cont)) return 0;
   const lvl = (cap) => Math.max(capInfo(s, cap).level, extra[cap] || 0);
   return flowValue(s, flow, lvl, rid) - base;
+}
+
+// In words: what would be different with what recipe `rid` makes?
+export function gainHow(s, flow, rid) {
+  const extra = capsFromRecipe(rid);
+  if (flow === 'food') return foodRate(s, (cap) => Math.max(capInfo(s, cap).level, extra[cap] || 0), rid).how;
+  const names = { sleep: ['bed', 'shelter'], water: ['well'], fuel: ['hearth', 'roof'] }[flow] || [];
+  return names.filter((c) => (extra[c] || 0) > capInfo(s, c).level).map((c) => ({ bed: 'a softer bed', shelter: 'warmer shelter', well: 'filtered water', hearth: 'slower burning', roof: 'a roof over the fire' }[c])).join(', ');
 }
 
 export function gainText(flow, g) {
@@ -166,7 +197,7 @@ export function rankProjects(s, P, list, selKey) {
   }
   if (flow) {
     const base = flowValue(s, flow, (cap) => capInfo(s, cap).level);
-    for (const n of rest) n.gain = n.key[0] === 'r' ? flowGain(s, flow, n.key.slice(2), base) : 0;
+    for (const n of rest) { n.gain = n.key[0] === 'r' ? flowGain(s, flow, n.key.slice(2), base) : 0; n.gainHow = n.gain > 1e-6 ? gainHow(s, flow, n.key.slice(2)) : ''; }
     rest.sort((a, b) => (b.gain > 1e-6) - (a.gain > 1e-6) || (b.gain > 1e-6 && a.gain > 1e-6 ? b.gain / Math.max(b.total, 30) - a.gain / Math.max(a.total, 30) : a.total - b.total));
     return { sel, rest, flow, base };
   }
@@ -218,7 +249,7 @@ export function taskList(s, P, ranked) {
       if (sel.repeat === 'food') {
         for (const { it } of reach(s)) if (kindOf(it).food && (it.q.tannin || 0) <= 25) push({ key: 'e.' + it.kind, name: `Eat ${kindOf(it).name}`, cmd: { t: 'eat', id: it.id }, minutes: 10, met: 1.5, mode: 'rest', note: `${Math.round(kindOf(it).food.kcal * Math.min(it.n, kindOf(it).food.portion))} kcal` }, true);
         const foods = Object.keys(L.res).map((rid) => gatherTask(s, rid, '')).filter((t) => t && (KINDS[RESOURCES[t.key.slice(2)].gather.kind].food || KINDS[RESOURCES[t.key.slice(2)].gather.kind].crush));
-        for (const t of foods) t.kcal = gatherStatus(s, t.key.slice(2)).rate * kcalPerUnit(RESOURCES[t.key.slice(2)].gather.kind, (cap) => capInfo(s, cap).level);
+        for (const t of foods) { const f = resourceFood(s, t.key.slice(2), (cap) => capInfo(s, cap).level); t.kcal = f ? f.v : 0; t.why = f ? f.how.split(', ').slice(1).join(', ') : ''; }
         foods.sort((a, b) => b.kcal - a.kcal).forEach((t) => { t.note = `~${Math.round(t.kcal)} kcal/h`; push(t, true); });
         for (const rid of ['hunt_small', 'spear_fish', 'angle']) push(taskForStep(s, P, 'r.' + rid, ''), true);
       }

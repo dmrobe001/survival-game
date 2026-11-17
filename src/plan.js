@@ -86,7 +86,7 @@ function tables() {
   for (const kind in KINDS) {
     const k = KINDS[kind];
     if (kind === 'project') continue;
-    for (const cap of Object.keys(k.caps || {}).concat(k.cont ? ['vessel', 'bag'] : [])) {
+    for (const cap of Object.keys(k.caps || {}).concat(k.cont ? ['vessel', 'bag', 'leach'] : [])) {
       const level = capOf(typical(kind), cap);
       if (level > 0) (capKinds[cap] = capKinds[cap] || []).push({ kind, level });
     }

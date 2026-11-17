@@ -169,8 +169,8 @@ for (const id in KINDS) {
     tools: [{ cap: k.crush.cap, min: k.crush.min }], in: [{ id: 'x', kind: id, n: base, max: base * 4 }], scale: 'x',
     make: (c) => c.give(k.crush.to, c.ins.x.n * k.crush.y, k.crush.q || {}) });
   if (k.soak) R({ id: 'soak_' + id, name: `Leach ${k.name}`, group: 'Food', time: 15, flat: true,
-    desc: 'Left in a fine bag or basket in running water until the bitterness is gone.',
-    tools: [{ cap: 'bag', min: 1 }], res: 'water',
+    desc: 'Soaked in a vessel with the water poured off and changed until it runs clear, or sunk in a closed bag in a stream. An open tray just loses the meal.',
+    tools: [{ cap: 'leach', min: 1 }], res: 'water',
     in: [{ id: 'x', kind: id, n: base, max: base * 6, q: { tannin: 25 } }], scale: 'x',
     make: (c) => c.give(id, c.ins.x.n, Object.assign({}, c.ins.x.q), { proc: { left: k.soak.hours * 60, set: k.soak.set, name: 'The leaching ' + k.name } }) });
   if (k.dry) R({ id: 'dry_' + id, name: `Dry ${k.name}`, group: 'Food', time: 20, flat: true,
@@ -340,7 +340,7 @@ export const TAG_NAMES = {
 };
 export const CAP_NAMES = {
   pound: 'hammer', cut: 'cutting edge', chop: 'chopping edge', scrape: 'scraper', pierce: 'piercer', dig: 'digging tool', grind: 'grinding surface',
-  billet: 'soft hammer', spindle: 'fire spindle', fireboard: 'hearth board', fire: 'lit fire', boil: 'boiling setup', bag: 'fine container',
+  billet: 'soft hammer', spindle: 'fire spindle', fireboard: 'hearth board', fire: 'lit fire', boil: 'boiling setup', bag: 'fine container', leach: 'leaching vessel or closed bag',
   vessel: 'watertight vessel', rack: 'drying rack', oven: 'earth oven', kiln: 'kiln', hunt: 'hunting weapon', fishspear: 'fish spear', line: 'hook and line',
   embers: 'live embers', shelter: 'shelter', roof: 'roof', bed: 'bed', hearth: 'hearth', well: 'well',
 };
