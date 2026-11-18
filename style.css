@@ -281,3 +281,5 @@ h2.pane-h small, .pane-h small { text-transform: none; letter-spacing: 0; font-w
 .row.proj .row-name { flex: 1; }
 .row.proj .num i { font-style: normal; color: var(--warn); margin-right: 2px; }
 .row.goal { box-shadow: inset 3px 0 0 var(--accent); padding-left: 9px; }
+
+.gtake i, .hand-name i { font: normal 500 0.68rem var(--mono); color: var(--accent); }

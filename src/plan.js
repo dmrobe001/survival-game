@@ -23,6 +23,7 @@ import { RECIPES, CAP_NAMES } from './data/recipes.js';
 import { capOf, reach, here } from './items.js';
 import { capInfo, planInput, recipeStatus, gatherStatus, travelInfo } from './actions.js';
 import { genLocation, prospect } from './world.js';
+import { passRate, pieceSpread, searchSpread, pieceSize } from './tiers.js';
 import { stream, rand, randn, clamp } from './util.js';
 
 // ------------------------------------------------------------------ static tables (built once from the library)
@@ -234,8 +235,41 @@ export function makePlanner(s, extra = null) {
     for (const x of optionsFor(kind)) { if (made && x.type === 'gather') continue; const c = cost(x, n); if (c < m) { m = c; o = x; } }
     return { o, m };
   }
-  // The cheapest way to hold `cap` at `min` or better. Something collected
-  // is judged by the deposit it would come from, not by an average piece.
+  // Collecting something that must pass a test (a cobble good enough for a
+  // hammer, a lump that knaps well): pieces scatter around each deposit's
+  // mean, so the expected time to `pieces` good ones is pieces / (pieces per
+  // hour x fraction that pass). Compare here, every known place (plus the
+  // walk), and searching (an unknown deposit: wider scatter, typical mean).
+  const srcMemo = {};
+  function srcBest(rid, kind, test, pieces, tag, what) {
+    const mk = rid + '|' + tag + '|' + pieces;
+    if (!srcMemo[mk]) {
+      const g = RESOURCES[rid].gather, srcs = [];
+      if (enough(rid, L.res[rid])) srcs.push({ w: { mode: 'here', m: 0 }, r: L.res[rid], env: L.env, rate: Math.max(gatherStatus(s, rid).rate, 1e-3) });
+      for (const id in s.locs) if (id !== s.at && enough(rid, s.locs[id].res[rid])) srcs.push({ w: { mode: 'goto', to: id, m: travelInfo(s, id).minutes }, r: s.locs[id].res[rid], env: s.locs[id].env, rate: g.rate * 0.8 });
+      srcs.push({ w: Object.assign({ mode: 'search' }, odds[rid]), r: null, rate: g.rate * 0.8 });
+      let best = null, first = null;
+      for (const src of srcs) {
+        const p = src.r ? passRate(kind, src.r.q, pieceSpread(rid, src.env), test) : passRate(kind, {}, searchSpread(rid), test);
+        if (!first) first = { p, w: src.w };
+        if (p <= 0) continue;
+        const collect = Math.max(30, Math.ceil((60 * pieces) / ((src.rate / pieceSize(kind)) * p) / 30) * 30);
+        if (!best || src.w.m + collect < best.w.m + best.collect) best = { w: src.w, p, collect };
+      }
+      if (best) {
+        const name = KINDS[kind].name, pct = (p) => (p >= 0.995 ? 'nearly all' : p < 0.005 ? 'almost none' : `about ${Math.round(p * 100)}%`);
+        if (best.w.mode === 'here' && best.p < 0.9) best.why = `${pct(best.p)} of the ${name}s here will do for ${what}`;
+        else if (best.w !== first.w && first.w.mode !== 'search') best.why = `${pct(first.p)} of the ${name}s ${first.w.mode === 'here' ? 'here' : 'at ' + s.locs[first.w.to].name.toLowerCase()} would do for ${what}`;
+      }
+      srcMemo[mk] = best || { none: true };
+    }
+    const b = srcMemo[mk];
+    if (b.none) return { m: Infinity };
+    const g = RESOURCES[rid].gather, tool = g.tool ? capEst(g.tool.cap, g.tool.min).m : 0;
+    return Object.assign({ m: b.w.m + b.collect + tool }, b);
+  }
+
+  // The cheapest way to hold `cap` at `min` or better.
   const capMemo = {};
   function capEst(cap, min) {
     if (capNow(cap) >= min) return { m: 0, met: true };
@@ -245,33 +279,41 @@ export function makePlanner(s, extra = null) {
     let best = { m: Infinity, kind: null };
     for (const c of T.capKinds[cap] || []) {
       for (const rid of T.gatherers[c.kind] || []) {
-        const test = (q) => capOf(sample(c.kind, q), cap) >= min;
-        const w = resWhere(rid, test, '|' + mk);
-        if (w.mode === 'search' && c.level < min) continue;
-        const g = RESOURCES[rid].gather;
-        const m = w.m + 30 + (g.tool ? capEst(g.tool.cap, g.tool.min).m : 0);
-        if (m < best.m) {
-          const near = resWhere(rid), r = near.mode === 'here' ? L.res[rid] : near.mode === 'goto' ? s.locs[near.to].res[rid] : null;
-          const short = r && w.mode !== near.mode ? `${KINDS[c.kind].name}s ${near.mode === 'here' ? 'here' : 'at ' + s.locs[near.to].name.toLowerCase()} are not good enough for a ${CAP_NAMES[cap] || cap} (${Math.round(capOf(sample(c.kind, r.q), cap))}; need ${min})` : '';
-          best = { m, kind: c.kind, src: { rid, w, why: short } };
-        }
+        const b = srcBest(rid, c.kind, (it) => capOf(it, cap) >= min, 1, cap + min, `a ${CAP_NAMES[cap] || cap} (${min}+)`);
+        if (b.m < best.m) best = { m: b.m, kind: c.kind, src: Object.assign({ rid }, b) };
       }
       if (c.level < min) continue;
       const b = bestOpt(c.kind, 1, true);
       if (b.m < best.m) best = { m: b.m, kind: c.kind };
     }
-    return (capMemo[mk] = best);
+    if (!stack.size) capMemo[mk] = best; // as for optionsFor: only answers no cycle guard cut short
+    return best;
   }
   function inputEst(spec, times) {
     const p = planInput(s, spec, null);
-    let kind = null, m = Infinity, deficit = 0;
+    let best = { m: Infinity, kind: null, deficit: 0 };
     for (const k of kindsFor(spec)) {
       const d = unitsOf(spec, k) * times - (p.kind === k ? p.have : 0);
       if (d <= 1e-9) return { m: 0, met: true };
-      const b = bestOpt(k, d);
-      if (b.m < m) { m = b.m; kind = k; deficit = d; }
+      const tested = spec.q && Object.keys(spec.q).some((q) => q in KINDS[k].q);
+      const b = bestOpt(k, d, !!tested && !!(T.gatherers[k] || []).length);
+      if (b.m < best.m) best = { m: b.m, kind: k, deficit: d };
+      if (tested) for (const rid of T.gatherers[k] || []) {
+        const test = (it) => Object.keys(spec.q).every((q) => (it.q[q] ?? 0) >= spec.q[q]);
+        const what = Object.keys(spec.q).map((q) => `${q} ${spec.q[q]}+`).join(', ');
+        const g = srcBest(rid, k, test, Math.ceil(d / pieceSize(k) - 1e-9), 'q' + JSON.stringify(spec.q), what);
+        if (g.m < best.m) best = { m: g.m, kind: k, deficit: d, src: Object.assign({ rid }, g) };
+      }
     }
-    return { m, kind, deficit };
+    return best;
+  }
+  // A collecting step from a chosen deposit.
+  function collectStep(src, forKey, needCap, add) {
+    const g = RESOURCES[src.rid].gather, key = whereKey(src.rid, src.w);
+    if (src.why) why[key] = src.why;
+    if (g.tool) needCap(g.tool.cap, g.tool.min, key);
+    add({ key, minutes: src.w.m + src.collect, wait: 0, times: 1 }, forKey);
+    return key;
   }
 
   // Expand one target into an ordered, de-duplicated list of steps. A tool
@@ -296,11 +338,7 @@ export function makePlanner(s, extra = null) {
       const e = capEst(cap, min);
       if (!e.kind || !isFinite(e.m)) { unknown = true; return null; }
       if (!e.src) return obtain(e.kind, 1, forKey);
-      // collect it from the deposit that is good enough
-      const g = RESOURCES[e.src.rid].gather, key = whereKey(e.src.rid, e.src.w);
-      if (e.src.why) why[key] = e.src.why;
-      if (g.tool) needCap(g.tool.cap, g.tool.min, key);
-      add({ key, minutes: e.src.w.m + 30, wait: 0, times: 1 }, forKey);
+      const key = collectStep(e.src, forKey, needCap, add);
       for (const c in T.capKinds) { const hit = T.capKinds[c].find((x) => x.kind === e.kind); if (hit) planned[c] = Math.max(planned[c] || 0, c === cap ? min : hit.level); }
       return key;
     }
@@ -329,7 +367,7 @@ export function makePlanner(s, extra = null) {
         if (spec.opt) continue;
         const e = inputEst(spec, spec.keep ? 1 : times);
         if (e.met) continue;
-        const k = e.kind ? obtain(e.kind, e.deficit, key) : null;
+        const k = !e.kind ? null : e.src ? collectStep(e.src, key, needCap, add) : obtain(e.kind, e.deficit, key);
         if (!k) unknown = true;
         if (top) reqs.in[spec.id] = k;
       }
@@ -371,5 +409,5 @@ export function makePlanner(s, extra = null) {
   }
 
   const keys = Object.keys(RESOURCES).map((r) => 'g.' + r).concat(Object.keys(RECIPES).map((r) => 'r.' + r));
-  return { node, keys, has: (key) => keys.includes(key) };
+  return { node, keys, has: (key) => keys.includes(key), whyOf: (key) => why[key] || '' };
 }

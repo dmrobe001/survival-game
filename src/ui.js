@@ -6,7 +6,7 @@ import { esc, fmt, fmtTime, clamp } from './util.js';
 import { KINDS, UNIT, QUALITY_NOTE } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
 import { RECIPES, GROUPS, CAP_NAMES } from './data/recipes.js';
-import { kindOf, itemName, amountText, massOf, contSpec, usedVol, whyNotHold, capsOf, reach, here, handsUsed, handsFor, carriedMass, missingSlots, trashHere } from './items.js';
+import { tierLabel, kindOf, itemName, amountText, massOf, contSpec, usedVol, whyNotHold, capsOf, reach, here, handsUsed, handsFor, carriedMass, missingSlots, trashHere } from './items.js';
 import { hourOf, dayOf, airTemp, feltTemp, isDark, sleepQuality, impairment, LIMITS } from './sim.js';
 import { newGame, act, gatherStatus, recipeStatus, planInput, slotSpec, waterHere, trapsHere, travelInfo, MAX_CARRY } from './actions.js';
 import { dist, bearing } from './world.js';
@@ -514,7 +514,7 @@ function stashPane() {
   const built = L.items.filter((it) => kindOf(it).fixed || it.proc);
   return `<section class="pane stash" aria-label="Stash"><div class="pane-h"><h2>Stash</h2>${uibtn('Inventory', 'inv', { cls: 'small-btn' })}</div>
     ${built.length ? `<div class="chips built">${built.map(builtChip).join('')}</div>` : ''}
-    <div class="ground" id="ground" data-keep-scroll>${loose.length ? loose.map((it) => `<span class="gitem"><button class="gtake" data-cmd="${esc(JSON.stringify({ t: 'grab', id: it.id }))}">${esc(itemName(it))} <b>${amountText(it)}</b></button><button class="gx" aria-label="Move ${esc(itemName(it))} to the trash" data-cmd="${esc(JSON.stringify({ t: 'move', id: it.id, to: 'trash' }))}">×</button></span>`).join('') : '<span class="muted small">Nothing here yet.</span>'}</div></section>`;
+    <div class="ground" id="ground" data-keep-scroll>${loose.length ? loose.map((it) => `<span class="gitem"><button class="gtake" data-cmd="${esc(JSON.stringify({ t: 'grab', id: it.id }))}">${esc(itemName(it))} <b>${amountText(it)}</b>${tierLabel(it) ? ` <i>${esc(tierLabel(it))}</i>` : ''}</button><button class="gx" aria-label="Move ${esc(itemName(it))} to the trash" data-cmd="${esc(JSON.stringify({ t: 'move', id: it.id, to: 'trash' }))}">×</button></span>`).join('') : '<span class="muted small">Nothing here yet.</span>'}</div></section>`;
 }
 
 function handStats(it) {
@@ -541,7 +541,7 @@ function handsBar() {
   for (const { it, w } of slots) {
     used += w;
     html += `<button class="hand ${w === 2 ? 'both' : ''}" data-cmd="${esc(JSON.stringify({ t: 'move', id: it.id, to: 'ground' }))}" title="Set it down">
-      <span class="hand-name">${esc(itemName(it))} <b>${amountText(it)}</b></span><span class="hand-stats">${handStats(it).map(esc).join(' · ')}</span></button>`;
+      <span class="hand-name">${esc(itemName(it))} <b>${amountText(it)}</b>${tierLabel(it) ? ` <i>${esc(tierLabel(it))}</i>` : ''}</span><span class="hand-stats">${handStats(it).map(esc).join(' · ')}</span></button>`;
   }
   for (; used < 2; used++) html += `<div class="hand empty"><span class="muted small">${used === 0 && !slots.length ? 'left' : 'right'} hand empty</span></div>`;
   const worn = S.c.worn.length ? `<div class="worn small muted">wearing ${S.c.worn.map((it) => esc(itemName(it))).join(', ')}</div>` : '';
@@ -650,7 +650,11 @@ function run(cmd) {
   ui.notice = res.ok ? '' : res.msg || '';
   ui.fresh = S.log.length - n0;
   if (res.found) ui.view = res.found;
-  if (cmd.t === 'recipe' && res.ok) delete S.goals['r.' + cmd.id];
+  if (res.done) {
+    delete S.goals[res.done];
+    // finishing the selected project closes it, or goes back up to the project it was a step toward
+    if (S.project === res.done) { S.project = ui.projBack.pop() || null; ui.resetProjScroll = true; }
+  }
   if (cmd.t === 'travel' && res.ok) ui.view = S.at;
   save();
   const elapsed = S.t - t0;

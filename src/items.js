@@ -12,6 +12,7 @@
 
 import { KINDS, UNIT } from './data/items.js';
 import { clamp, fmt } from './util.js';
+import { tiersOf, tierWords } from './tiers.js';
 
 export const kindOf = (it) => KINDS[it.kind];
 
@@ -111,15 +112,25 @@ export function capsOf(it) {
 }
 
 // ---- stacks
-const TOL = 12; // qualities closer than this merge into one stack
-
+// Policy: like things merge unless some line that the game tests (see
+// tiers.js) falls between them. Within a tier, averaging can never move a
+// stack across such a line, so nothing that matters is lost; qualities no
+// rule tests just average.
 export function canMerge(a, b) {
   const k = kindOf(a);
   if (a.kind !== b.kind || a === b) return false;
   if (k.lump || k.slots || k.cont || k.fixed || a.proc || b.proc || a.parts || b.parts) return false;
-  for (const key in a.q) if (Math.abs(a.q[key] - (b.q[key] ?? 0)) > TOL) return false;
+  const tiers = tiersOf(a.kind);
+  if (!tiers) return true;
+  for (const key in tiers.q) {
+    const x = a.q[key] ?? 0, y = b.q[key] ?? 0;
+    if (tiers.q[key].some((c) => (x >= c.v - 1e-9) !== (y >= c.v - 1e-9))) return false;
+  }
   return true;
 }
+
+// What a piece is good enough for, if some recipe draws a line: "hammer 35+".
+export const tierLabel = (it) => tierWords(it, capOf);
 
 // Add an item to an array, merging into a similar stack when one exists.
 // Qualities of a merged stack are the amount-weighted mean.

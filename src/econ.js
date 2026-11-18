@@ -32,6 +32,7 @@ import { capOf, contSpec, reach, here } from './items.js';
 import { travelInfo } from './actions.js';
 import { typical, sample, yieldsOf, outputsOf, kindsFor, unitsOf, makePlanner } from './plan.js';
 import { WEATHER } from './sim.js';
+import { pieceSpread, piecesIn, bestOf } from './tiers.js';
 import { clamp, fmt } from './util.js';
 
 export const NEEDS = ['sleep', 'food', 'water', 'fire', 'repairs'];
@@ -540,8 +541,8 @@ function gainedKinds(s, P, n) {
     else if (st.key[0] === 'g') {
       const rid = st.key.slice(2).split('@')[0], g = RESOURCES[rid].gather;
       if (g) {
-        const w = P.node(st.key).w, r = w.mode === 'here' ? here(s).res[rid] : w.mode === 'goto' ? s.locs[w.to].res[rid] : null;
-        kinds = [g.kind]; q = r ? r.q : null;
+        const w = P.node(st.key).w, loc = w.mode === 'here' ? here(s) : w.mode === 'goto' ? s.locs[w.to] : null, r = loc && loc.res[rid];
+        kinds = [g.kind]; q = r ? bestPiece(rid, g.kind, r.q, loc.env, g.rate * 0.5) : null;
         if (!(g.kind in picked) || q) picked[g.kind] = q;
       }
     }
@@ -555,6 +556,13 @@ function gainedKinds(s, P, n) {
   }
   const kinds = made.filter((k) => !used.has(k) && k !== 'project');
   return { kinds, items: kinds.map(piece), sig: kinds.map((k) => k + (picked[k] ? JSON.stringify(picked[k]) : '')).sort().join(',') };
+}
+// The best piece a half-hour's collecting typically turns up: the deposit's
+// mean plus its scatter times the expected largest of that many draws.
+function bestPiece(rid, kind, mean, env, perTrip) {
+  const sd = pieceSpread(rid, env), z = bestOf(piecesIn(kind, perTrip)), q = Object.assign({}, mean);
+  for (const k in sd) if (k in q) q[k] = Math.min(100, q[k] + sd[k] * z);
+  return q;
 }
 function capsOfItems(items) {
   const out = {};

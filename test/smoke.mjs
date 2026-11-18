@@ -9,6 +9,8 @@ import { dayOf, hourOf } from '../src/sim.js';
 import { makePlanner } from '../src/plan.js';
 import { taskList } from '../src/advice.js';
 import { upkeep, projectRows, NEEDS } from '../src/econ.js';
+import { tiersOf, passRate, tierKey } from '../src/tiers.js';
+import { canMerge, capOf } from '../src/items.js';
 
 let failures = 0;
 const check = (cond, msg) => { if (!cond) { failures++; console.log('  FAIL:', msg); } };
@@ -65,6 +67,23 @@ check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'stat
   const before = JSON.stringify(s);
   upkeep(s, ['hearth', 'bark_basin']);
   check(JSON.stringify(s) === before, 'upkeep must not change the game state');
+}
+
+// --- quality tiers: merge only within a tier; better deposits pass more often
+{
+  const c = (h) => ({ id: 0, kind: 'cobble', n: 1, q: { hardness: h, thermal: 60, integrity: 100 } });
+  check(tiersOf('cobble').q.hardness.some((x) => Math.abs(x.v - 38.9) < 0.1), 'knapping (hammer 35) should put a hardness line near 38.9');
+  check(canMerge(c(40), c(43)) && !canMerge(c(37), c(41)), 'cobbles merge within a tier and not across a line');
+  const soft = passRate('cobble', { hardness: 30 }, { hardness: 8 }, (it) => capOf(it, 'pound') >= 35);
+  const hard = passRate('cobble', { hardness: 50 }, { hardness: 8 }, (it) => capOf(it, 'pound') >= 35);
+  check(soft > 0 && soft < 0.3 && hard > 0.9, `pass rates should follow the deposit (soft ${soft}, hard ${hard})`);
+  const s2 = newGame(seed);
+  for (let i = 0; i < 3; i++) act(s2, { t: 'survey' });
+  if (here(s2).res.cobbles && here(s2).res.cobbles.known) {
+    for (let i = 0; i < 3; i++) act(s2, { t: 'gather', rid: 'cobbles', min: 30 });
+    const keys = here(s2).items.filter((it) => it.kind === 'cobble').map(tierKey);
+    check(new Set(keys).size === keys.length, 'cobble stacks on the ground should be one per tier: ' + keys.join(' | '));
+  }
 }
 
 // --- a greedy bot: tries to stay alive and make everything it can

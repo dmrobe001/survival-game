@@ -15,8 +15,9 @@ import { KINDS, UNIT } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
 import { RECIPES, TAG_NAMES, CAP_NAMES } from './data/recipes.js';
 import { genLocation, findStart, prospect, dist, bearing } from './world.js';
+import { pieceSpread, piecesIn, tierKey, tierRank, tiersOf } from './tiers.js';
 import { kindOf, mk, itemName, label, massOf, contSpec, whyNotHold, roomFor, capOf, addTo, split, reach, find, removeFrom, canMerge,
-  best, here, handsFor, handsUsed, carriedMass, wornIn, missingSlots, trashHere } from './items.js';
+  best, here, handsFor, handsUsed, carriedMass, wornIn, missingSlots, trashHere, tierLabel } from './items.js';
 import { say, advance, isDark, raining, condSev, footwear, impairment } from './sim.js';
 
 export const MAX_CARRY = 35; // kg felt
@@ -165,12 +166,34 @@ function doGather(s, cmd) {
   r.amt -= n;
   r.assessed = true;
   if (n <= 0) { say(s, `You search but find no ${kind.name} worth taking.`); return { ok: true }; }
-  const q = {};
-  for (const key in r.q) q[key] = r.q[key] + 5 * randn(s.rng);
-  if (q.dryness != null && raining(s)) q.dryness -= 35;
-  give(s, g.kind, n, q);
-  say(s, `You gather ${kind.unit === 'ea' ? n + ' × ' : fmt(n) + UNIT[kind.unit] + ' of '}${kind.name}.`);
-  return { ok: true };
+  // Pieces vary around the deposit's mean. Draw them one by one (handful by
+  // handful for loose stuff), sort them into tiers, and give each tier its
+  // own stack: the best of the trip is kept apart from the rest.
+  const spread = pieceSpread(cmd.rid, here(s).env), wet = raining(s);
+  const m = piecesIn(g.kind, n), groups = {};
+  for (let i = 0; i < m; i++) {
+    const q = {};
+    for (const key in r.q) q[key] = r.q[key] + (spread[key] ?? 5) * randn(s.rng);
+    if (q.dryness != null && wet) q.dryness -= 35;
+    const piece = { kind: g.kind, q: Object.fromEntries(Object.entries(q).map(([k2, v]) => [k2, clamp(v, 0, 100)])) };
+    const key = tierKey(piece);
+    const gr = (groups[key] = groups[key] || { n: 0, q: {}, rank: 0 });
+    gr.n++;
+    for (const k2 in piece.q) gr.q[k2] = (gr.q[k2] || 0) + piece.q[k2];
+    gr.rank = key.split(',').reduce((a, x) => a + Number(x || 0), 0);
+  }
+  const list = Object.values(groups).sort((a, b) => b.rank - a.rank);
+  const per = n / m;
+  const placed = [];
+  for (const gr of list) {
+    for (const k2 in gr.q) gr.q[k2] /= gr.n;
+    placed.push(give(s, g.kind, kind.unit === 'ea' ? gr.n : Math.round(gr.n * per * 100) / 100, gr.q));
+  }
+  if (s._made) s._made = placed.filter(Boolean).slice(0, 1); // only the best of the trip goes to hand
+  const top = list.length > 1 ? (() => { const it = { kind: g.kind, n: 1, q: Object.assign({}, kind.q, list[0].q) }; return tierLabel(it); })() : '';
+  const said = `You gather ${kind.unit === 'ea' ? n + ' × ' : fmt(n) + UNIT[kind.unit] + ' of '}${kind.name}${top ? `; the best ${kind.unit === 'ea' && list[0].n === 1 ? 'is' : 'are'} good for ${top}` : ''}.`;
+  say(s, said);
+  return { ok: true, done: 'g.' + cmd.rid };
 }
 
 // The best carried container that will actually hold what you are picking
@@ -381,8 +404,9 @@ function doRecipe(s, cmd) {
     return doWork(s, { id: it.id });
   }
   session(s, r, st.time);
-  if (!s.dead) { const n = s.log.length; if (finish(s, r, ins, st.k) && s.log.length === n) say(s, `Done: ${r.name.toLowerCase()}.`); }
-  return { ok: true };
+  let done = false;
+  if (!s.dead) { const n = s.log.length; done = finish(s, r, ins, st.k); if (done && s.log.length === n) say(s, `Done: ${r.name.toLowerCase()}.`); }
+  return { ok: true, done: done ? 'r.' + r.id : null };
 }
 
 function doWork(s, cmd) {
@@ -397,8 +421,9 @@ function doWork(s, cmd) {
   if (s.dead) return { ok: true };
   if (p.left <= 0.5) {
     removeFrom(f.list, f.it);
-    const n = s.log.length;
-    if (finish(s, r, p.ins, p.k) && s.log.length === n) say(s, `Finished: ${r.name.toLowerCase()}.`, 'good');
+    const n = s.log.length, done = finish(s, r, p.ins, p.k);
+    if (done && s.log.length === n) say(s, `Finished: ${r.name.toLowerCase()}.`, 'good');
+    return { ok: true, done: done ? 'r.' + r.id : null };
   } else say(s, `You work on the ${p.name}. ${fmtTime(p.left)} to go.`);
   return { ok: true };
 }
@@ -700,9 +725,13 @@ function freeHandFor(s, it, keep) {
   return true;
 }
 
-function pickUp(s, it, list, keep, handful = true) {
+function pickUp(s, it, list, keep, handful = true, auto = false) {
   const k = kindOf(it);
   if (k.fixed || k.liquid || it.proc || it.proj) return null;
+  // Picking up on your own: never trade a better piece in hand for a worse
+  // one of the same kind; trade a worse one for a better.
+  const rival = auto && tiersOf(it.kind) && s.c.hands.find((h) => h.kind === it.kind && !canMerge(h, it) && !keep.includes(h));
+  if (rival) { if (tierRank(rival) >= tierRank(it)) return null; removeFrom(s.c.hands, rival); addTo(loc(s).items, rival); }
   const room = MAX_CARRY - carriedMass(s);
   for (const c of s.c.hands.concat(s.c.worn)) {
     if (!contSpec(c) || whyNotHold(c, it, k.unit === 'ea' ? 1 : 0.001)) continue;
@@ -732,7 +761,7 @@ function settleHands(s) {
   const keep = s._used.filter((t) => s.c.hands.includes(t));
   for (const it of s._made) {
     if (!ground.includes(it)) continue;
-    const held = pickUp(s, it, ground, keep);
+    const held = pickUp(s, it, ground, keep, true, true);
     if (held) keep.push(held);
   }
 }

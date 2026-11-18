@@ -20,6 +20,7 @@ function visit(file) {
   let src = readFileSync(file, 'utf8');
   const names = [];
   src = src.replace(/^import\s*\{([^}]*)\}\s*from\s*'([^']+)';?[ \t]*$/gm, (m, list, spec) => {
+    if (/\bas\b/.test(list)) throw new Error(`${relative(root, file)}: 'import { a as b }' is not supported by this bundler`);
     const dep = resolve(dirname(file), spec);
     visit(dep);
     return `const {${list}} = __mod[${JSON.stringify(relative(root, dep))}];`;

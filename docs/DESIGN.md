@@ -92,7 +92,13 @@ now, what is on the ground, and your two hands.
   route is the bundle: "Boil water" needs the fire and the basin too, and
   saves what having all of them saves.
 - **Tasks** are only what one tap can do now. Steps on the selected
-  project's route come first, in route order.
+  project's route come first, in route order. A collecting step that has
+  to turn up a good-enough piece says how often one does ("about 47% of
+  the cobbles here will do for a hammer (35+)").
+- **Finishing the selected project** (the technique succeeds, or one
+  collecting trip for a collecting project) closes it, or, if you reached
+  it through a requirement link, goes back up to the project it was a step
+  toward.
 - **The status bar** shows reserves in two zones, split by a comfort line
   (the tick). Above it nothing happens; the bar just counts down. Below it
   you are impaired: work and travel slow and injuries get likelier, in
@@ -117,7 +123,40 @@ now, what is on the ground, and your two hands.
   such as a knapped core, is set down. Tools just used are never displaced;
   otherwise the thing held longest is set down. Only one hand's worth is
   picked up per action. Toolstone is now a lump measured in kilograms that
-  knapping wears down.
+  knapping wears down. Of a collecting trip, only the best stack goes to
+  hand, and it never displaces a better piece of the same kind (it does
+  displace a worse one).
+
+## Quality tiers (src/tiers.js)
+
+A quality matters only where some rule tests it, so stocks are stratified
+by those tests rather than tracked as continuous distributions.
+
+- **Lines come from the library.** Input and slot minimums are lines as
+  they stand (a spear shaft needs straightness 45). Tool minimums are
+  turned into lines on the quality a kind's capability formula depends on,
+  by bisection with its other qualities at their defaults: knapping needs a
+  hammer of 35, and a cobble's hammer is 0.9 × hardness, so hardness 38.9.
+  Upper limits ("can still be resharpened") and freshness 25 (safe to eat)
+  are lines too. A tier is the interval between two lines.
+- **Merging.** Like items merge unless a line falls between them. An
+  interval is closed under averaging, so a merged stack is never worse for
+  any recipe than its parts; qualities no rule tests just average. A good
+  hammer therefore keeps its identity until good hammers are common enough
+  to stack.
+- **Collecting.** Pieces scatter around their deposit's mean by 70% of the
+  scatter between deposits (a guess). A trip draws them one by one (loose
+  material by the half handful, lumps by the half kilogram, at most 12
+  draws), sorts them into tiers, and gives each tier its own stack, so the
+  best of the trip stands apart. The journal says what the best is good
+  for. Stash pills and hands show the highest line a piece clears.
+- **Planning.** Expected time to a passing piece = pieces needed ÷ (pieces
+  an hour × fraction that pass). The fraction comes from 200 fixed normal
+  draws per deposit, so it is deterministic. The planner compares here,
+  every known place (plus the walk) and searching (an unknown deposit:
+  typical mean, the two scatters combined). The upkeep evaluator values a
+  collected tool as the typical best of one half-hour trip (the expected
+  largest of that many normal draws).
 
 ## Upkeep (src/econ.js)
 
