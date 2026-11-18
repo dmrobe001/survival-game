@@ -32,11 +32,12 @@ function taskForStep(s, P, key, why) {
   const n = P.node(key);
   if (!n.ready || n.passive) return null;
   if (n.recipe) return recipeTask(s, n.recipe.id, why);
-  const rid = key.slice(2);
+  const rid = key.slice(2).split('@')[0];
+  if (n.why) why = n.why;
   if (n.w.mode === 'here') return gatherTask(s, rid, why);
   if (n.w.mode === 'goto') { const info = travelInfo(s, n.w.to); return { key: 'go.' + n.w.to, name: `Walk to ${s.locs[n.w.to].name.toLowerCase()}`, cmd: { t: 'travel', to: n.w.to }, minutes: info.minutes, met: info.met, mode: 'travel', why: why || `for ${RESOURCES[rid].name.toLowerCase()}`, note: `${fmt(info.km)} km` }; }
-  return { key: 'x.find.' + rid, name: `Explore for ${RESOURCES[rid].name.toLowerCase()}`, cmd: { t: 'explore', hours: n.w.hours, targets: [rid] }, minutes: n.w.hours * 60, met: 3.5, mode: 'travel', why,
-    note: `about ${Math.round(n.w.p * 100)}% chance per trip` };
+  return { key: 'x.find.' + rid, name: `Explore for ${n.why ? 'better ' : ''}${RESOURCES[rid].name.toLowerCase()}`, cmd: { t: 'explore', hours: n.w.hours, targets: [rid] }, minutes: n.w.hours * 60, met: 3.5, mode: 'travel', why,
+    note: n.why ? 'quality varies by place' : `about ${Math.round(n.w.p * 100)}% chance per trip` };
 }
 
 // How each way of getting food turns into one tap.

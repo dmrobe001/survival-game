@@ -19,7 +19,7 @@
 
 import { KINDS } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
-import { RECIPES } from './data/recipes.js';
+import { RECIPES, CAP_NAMES } from './data/recipes.js';
 import { capOf, reach, here } from './items.js';
 import { capInfo, planInput, recipeStatus, gatherStatus, travelInfo } from './actions.js';
 import { genLocation, prospect } from './world.js';
@@ -47,6 +47,19 @@ export function typical(kind, depth = 0) {
     }
   }
   return (typicalCache[kind] = it);
+}
+
+// A piece of `kind` as it comes from a deposit with mean qualities `q`:
+// a cobble from a soft-stone bank is a soft cobble.
+const sampleCache = {};
+export function sample(kind, q) {
+  const base = typical(kind);
+  if (!q) return base;
+  const key = kind + JSON.stringify(q);
+  if (sampleCache[key]) return sampleCache[key];
+  const it = Object.assign({}, base, { q: Object.assign({}, base.q) });
+  for (const k in q) if (k in it.q) it.q[k] = q[k];
+  return (sampleCache[key] = it);
 }
 
 let TABLES = null;
@@ -169,22 +182,27 @@ export function makePlanner(s, extra = null) {
   const status = (rid) => statusMemo[rid] || (statusMemo[rid] = recipeStatus(s, RECIPES[rid], (s.choices || {})[rid] || {}));
   const enough = (rid, r) => r && r.known && (r.cap === Infinity || !RESOURCES[rid].gather || r.amt >= (KINDS[RESOURCES[rid].gather.kind].unit === 'ea' ? 1 : 0.05));
 
-  // Where is the nearest known source of a resource?
-  function resWhere(rid) {
-    if (whereMemo[rid]) return whereMemo[rid];
+  // Where is the nearest known source of a resource? With `test`, only
+  // sources whose deposit passes it count (cobbles hard enough to knap with).
+  function resWhere(rid, test = null, tag = '') {
+    const mk = rid + tag;
+    if (whereMemo[mk]) return whereMemo[mk];
+    const ok = (r) => enough(rid, r) && (!test || test(r.q));
     let w;
-    if (enough(rid, L.res[rid])) w = { mode: 'here', m: 0 };
+    if (ok(L.res[rid])) w = { mode: 'here', m: 0 };
     else {
       let to = null, m = Infinity;
       for (const id in s.locs) {
-        if (id === s.at || !enough(rid, s.locs[id].res[rid])) continue;
+        if (id === s.at || !ok(s.locs[id].res[rid])) continue;
         const t = travelInfo(s, id).minutes;
         if (t < m) { m = t; to = id; }
       }
       w = to ? { mode: 'goto', to, m } : Object.assign({ mode: 'search' }, odds[rid]);
     }
-    return (whereMemo[rid] = w);
+    return (whereMemo[mk] = w);
   }
+  const whereKey = (rid, w) => (w.mode === 'here' ? 'g.' + rid : `g.${rid}@${w.mode === 'goto' ? w.to : 'find'}`);
+  const why = {}; // reasons attached to steps, by key
 
   // Every known way to come by one kind of item, with a cost model
   //   minutes(n) = setup + (per unit or per batch) * n
@@ -211,21 +229,38 @@ export function makePlanner(s, extra = null) {
     return opts;
   }
   const cost = (o, n) => (o.type === 'gather' ? o.setup + Math.max(30, o.unit * n) : o.setup + Math.ceil(n / o.n0 - 1e-9) * o.per);
-  function bestOpt(kind, n) {
+  function bestOpt(kind, n, made = false) {
     let o = null, m = Infinity;
-    for (const x of optionsFor(kind)) { const c = cost(x, n); if (c < m) { m = c; o = x; } }
+    for (const x of optionsFor(kind)) { if (made && x.type === 'gather') continue; const c = cost(x, n); if (c < m) { m = c; o = x; } }
     return { o, m };
   }
+  // The cheapest way to hold `cap` at `min` or better. Something collected
+  // is judged by the deposit it would come from, not by an average piece.
+  const capMemo = {};
   function capEst(cap, min) {
     if (capNow(cap) >= min) return { m: 0, met: true };
     if (cap === 'boil') return { m: capEst('fire', 1).m + capEst('vessel', 0.5).m + bestOpt('cobble', 3).m };
-    let kind = null, m = Infinity;
+    const mk = cap + min;
+    if (capMemo[mk]) return capMemo[mk];
+    let best = { m: Infinity, kind: null };
     for (const c of T.capKinds[cap] || []) {
+      for (const rid of T.gatherers[c.kind] || []) {
+        const test = (q) => capOf(sample(c.kind, q), cap) >= min;
+        const w = resWhere(rid, test, '|' + mk);
+        if (w.mode === 'search' && c.level < min) continue;
+        const g = RESOURCES[rid].gather;
+        const m = w.m + 30 + (g.tool ? capEst(g.tool.cap, g.tool.min).m : 0);
+        if (m < best.m) {
+          const near = resWhere(rid), r = near.mode === 'here' ? L.res[rid] : near.mode === 'goto' ? s.locs[near.to].res[rid] : null;
+          const short = r && w.mode !== near.mode ? `${KINDS[c.kind].name}s ${near.mode === 'here' ? 'here' : 'at ' + s.locs[near.to].name.toLowerCase()} are not good enough for a ${CAP_NAMES[cap] || cap} (${Math.round(capOf(sample(c.kind, r.q), cap))}; need ${min})` : '';
+          best = { m, kind: c.kind, src: { rid, w, why: short } };
+        }
+      }
       if (c.level < min) continue;
-      const b = bestOpt(c.kind, 1);
-      if (b.m < m) { m = b.m; kind = c.kind; }
+      const b = bestOpt(c.kind, 1, true);
+      if (b.m < best.m) best = { m: b.m, kind: c.kind };
     }
-    return { m, kind };
+    return (capMemo[mk] = best);
   }
   function inputEst(spec, times) {
     const p = planInput(s, spec, null);
@@ -259,8 +294,15 @@ export function makePlanner(s, extra = null) {
         return keys.find((k) => k) || null;
       }
       const e = capEst(cap, min);
-      if (!e.kind) { unknown = true; return null; }
-      return obtain(e.kind, 1, forKey);
+      if (!e.kind || !isFinite(e.m)) { unknown = true; return null; }
+      if (!e.src) return obtain(e.kind, 1, forKey);
+      // collect it from the deposit that is good enough
+      const g = RESOURCES[e.src.rid].gather, key = whereKey(e.src.rid, e.src.w);
+      if (e.src.why) why[key] = e.src.why;
+      if (g.tool) needCap(g.tool.cap, g.tool.min, key);
+      add({ key, minutes: e.src.w.m + 30, wait: 0, times: 1 }, forKey);
+      for (const c in T.capKinds) { const hit = T.capKinds[c].find((x) => x.kind === e.kind); if (hit) planned[c] = Math.max(planned[c] || 0, c === cap ? min : hit.level); }
+      return key;
     }
     function obtain(kind, n, forKey) {
       const b = bestOpt(kind, n);
@@ -297,7 +339,8 @@ export function makePlanner(s, extra = null) {
     }
     if (target[0] === 'r') recipe(target.slice(2), 1, null, T.procWait[target.slice(2)] || 0, true);
     else {
-      const rid = target.slice(2), g = RESOURCES[rid].gather, w = resWhere(rid);
+      const [rid, at] = target.slice(2).split('@'), g = RESOURCES[rid].gather;
+      const w = !at ? resWhere(rid) : at === 'find' ? Object.assign({ mode: 'search' }, odds[rid]) : { mode: 'goto', to: at, m: travelInfo(s, at).minutes };
       if (g && g.tool) reqs.tool[g.tool.cap] = needCap(g.tool.cap, g.tool.min, target);
       add({ key: target, minutes: w.m + (g ? 30 : 0), wait: 0, times: 1 }, null);
     }
@@ -314,12 +357,13 @@ export function makePlanner(s, extra = null) {
       if (!n.ready && n.steps.length <= 1) n.unknown = true; // blocked by something the planner cannot route around
       n.steps[n.steps.length - 1].minutes = n.st.time || r.time;
     } else {
-      const rid = key.slice(2), def = RESOURCES[rid];
-      n.res = def; n.w = resWhere(rid); n.group = 'Collect and find';
+      const [rid, at] = key.slice(2).split('@'), def = RESOURCES[rid];
+      n.res = def; n.group = 'Collect and find'; n.why = why[key] || '';
+      n.w = !at ? resWhere(rid) : at === 'find' ? Object.assign({ mode: 'search' }, odds[rid]) : { mode: 'goto', to: at, m: travelInfo(s, at).minutes };
       const what = def.gather ? KINDS[def.gather.kind].name : def.name.toLowerCase();
       if (n.w.mode === 'here') { n.gs = def.gather ? gatherStatus(s, rid) : null; n.name = def.gather ? 'Collect ' + what : def.name + ' (here)'; n.ready = !!(n.gs && n.gs.ok); n.passive = !def.gather; }
       else if (n.w.mode === 'goto') { n.name = `Walk to ${s.locs[n.w.to].name.toLowerCase()} for ${what}`; n.ready = true; }
-      else { n.name = 'Find ' + def.name.toLowerCase(); n.ready = true; }
+      else { n.name = (at ? 'Find better ' : 'Find ') + def.name.toLowerCase(); n.ready = true; }
     }
     n.total = n.unknown ? Infinity : n.steps.reduce((a, st) => a + st.minutes + st.wait, 0);
     n.away = n.steps.length - 1;

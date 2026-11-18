@@ -30,7 +30,7 @@ import { RESOURCES } from './data/resources.js';
 import { RECIPES } from './data/recipes.js';
 import { capOf, contSpec, reach, here } from './items.js';
 import { travelInfo } from './actions.js';
-import { typical, yieldsOf, outputsOf, kindsFor, unitsOf, makePlanner } from './plan.js';
+import { typical, sample, yieldsOf, outputsOf, kindsFor, unitsOf, makePlanner } from './plan.js';
 import { WEATHER } from './sim.js';
 import { clamp, fmt } from './util.js';
 
@@ -64,7 +64,7 @@ const ALLCAPS = [...new Set(Object.values(KINDS).flatMap((k) => Object.keys(k.ca
 
 function makeKit(s, extraKinds, baseItems) {
   const items = (baseItems || reach(s).map((r) => r.it).filter((it) => !it.proj)).slice();
-  for (const k of extraKinds) items.push(typical(k));
+  for (const k of extraKinds) items.push(typeof k === 'string' ? typical(k) : k); // a kind, or a sample piece
   const lv = {}, top = {};
   const scan = (cap) => {
     let v = 0, it = null;
@@ -530,24 +530,35 @@ const useful = (kind) => { const k = KINDS[kind]; return !!(k.caps || k.cont || 
 // everything with a use that its steps make or collect, minus what a later
 // step uses up (the hand axe that becomes an axe head). Something collected
 // both as a tool and as material (cobbles as hammerstone and as hearth ring)
-// leaves a tool over.
-function gainedKinds(n) {
-  const made = [], picked = new Set(), recipes = n.steps.filter((st) => st.key[0] === 'r').map((st) => RECIPES[st.key.slice(2)]);
+// leaves a tool over. Collected things are as good as the deposit they come
+// from (soft cobbles make a poor hammer); made things are typical.
+function gainedKinds(s, P, n) {
+  const made = [], picked = {}, recipes = n.steps.filter((st) => st.key[0] === 'r').map((st) => RECIPES[st.key.slice(2)]);
   for (const st of n.steps) {
-    const g = st.key[0] === 'g' && RESOURCES[st.key.slice(2)].gather;
-    const kinds = st.key[0] === 'r' ? outputsOf(st.key.slice(2)) : g ? [g.kind] : [];
-    for (const k of kinds) { if (g) picked.add(k); if (useful(k) && !made.includes(k)) made.push(k); }
+    let kinds = [], q = null;
+    if (st.key[0] === 'r') kinds = outputsOf(st.key.slice(2));
+    else if (st.key[0] === 'g') {
+      const rid = st.key.slice(2).split('@')[0], g = RESOURCES[rid].gather;
+      if (g) {
+        const w = P.node(st.key).w, r = w.mode === 'here' ? here(s).res[rid] : w.mode === 'goto' ? s.locs[w.to].res[rid] : null;
+        kinds = [g.kind]; q = r ? r.q : null;
+        if (!(g.kind in picked) || q) picked[g.kind] = q;
+      }
+    }
+    for (const k of kinds) if (useful(k) && !made.includes(k)) made.push(k);
   }
-  const asTool = (k) => picked.has(k) && recipes.some((r) => r.tools.some((t) => !t.opt && capOf(typical(k), t.cap) >= t.min));
+  const piece = (k) => (k in picked ? sample(k, picked[k]) : typical(k));
+  const asTool = (k) => k in picked && recipes.some((r) => r.tools.some((t) => !t.opt && capOf(piece(k), t.cap) >= t.min));
   const used = new Set();
   for (const r of recipes) {
     for (const spec of r.in) if (!spec.keep && !spec.opt) for (const k of kindsFor(spec)) if (made.includes(k) && !asTool(k) && !outputsOf(r.id).includes(k)) used.add(k);
   }
-  return made.filter((k) => !used.has(k) && k !== 'project');
+  const kinds = made.filter((k) => !used.has(k) && k !== 'project');
+  return { kinds, items: kinds.map(piece), sig: kinds.map((k) => k + (picked[k] ? JSON.stringify(picked[k]) : '')).sort().join(',') };
 }
-function capsOfKinds(kinds) {
+function capsOfItems(items) {
   const out = {};
-  for (const k of kinds) for (const cap of ALLCAPS.concat(['fire'])) { const v = capOf(typical(k), cap); if (v > (out[cap] || 0)) out[cap] = v; }
+  for (const it of items) for (const cap of ALLCAPS.concat(['fire'])) { const v = capOf(it, cap); if (v > (out[cap] || 0)) out[cap] = v; }
   return out;
 }
 const subset = (a, b) => a.every((x) => b.includes(x));
@@ -575,20 +586,19 @@ export function projectRows(s, P, include = []) {
     const prog = key[0] === 'r' && L.items.find((it) => it.proj && it.proj.rid === rid);
     const goal = !!(s.goals && s.goals[key]);
     if (!prog && (!isFinite(n.total) || n.unknown || n.passive)) continue;
-    const gained = gainedKinds(n);
-    const sig = gained.slice().sort().join(',');
-    let ev = cache.get(sig);
+    const gi = gainedKinds(s, P, n), gained = gi.kinds;
+    let ev = cache.get(gi.sig);
     if (!ev) {
-      const u = gained.length ? upkeep(s, gained, baseItems) : base;
+      const u = gained.length ? upkeep(s, gi.items, baseItems) : base;
       let oneoff = 0;
       if (goals.length && gained.length) {
-        const P2 = makePlanner(s, capsOfKinds(gained));
+        const P2 = makePlanner(s, capsOfItems(gi.items));
         goalH(P2).forEach((h, i) => { if (isFinite(g0[i]) && isFinite(h)) oneoff += Math.max(0, g0[i] - h); });
       }
       const by = {};
       for (const k of NEEDS) by[k] = diff(base.parts[k], u.parts[k]);
       ev = { u, oneoff, by, saves: diff(base.U, u.U) };
-      cache.set(sig, ev);
+      cache.set(gi.sig, ev);
     }
     const needs = prog ? prog.proj.left : labor(n);
     const nh = needs / 60;
