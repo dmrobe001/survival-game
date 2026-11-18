@@ -11,11 +11,12 @@ import { hourOf, dayOf, airTemp, feltTemp, isDark, sleepQuality, impairment, LIM
 import { newGame, act, gatherStatus, recipeStatus, planInput, slotSpec, waterHere, trapsHere, travelInfo, MAX_CARRY } from './actions.js';
 import { dist, bearing } from './world.js';
 import { makePlanner } from './plan.js';
-import { REPEAT, projectList, rankProjects, taskList, runway, flowText, gainText, flowNow } from './advice.js';
+import { taskList, runway } from './advice.js';
+import { projectRows, SORTS, tagsOf, NEEDS } from './econ.js';
 
 const SAVE_KEY = 'foothold-save-v1';
 let S = null;
-const ui = { theme: 'auto', overlay: null, menu: false, inv: false, vitals: false, collapsed: {}, projBack: [], tab: 'plan', sel: null, planFilter: 'all', edges: [], view: null, choices: {}, targets: {}, hours: 2, notice: '', busy: false, fast: false, confirmNew: false };
+const ui = { sort: 'horizon', ver: 0, theme: 'auto', overlay: null, menu: false, inv: false, vitals: false, collapsed: {}, projBack: [], tab: 'plan', sel: null, planFilter: 'all', edges: [], view: null, choices: {}, targets: {}, hours: 2, notice: '', busy: false, fast: false, confirmNew: false };
 
 // ------------------------------------------------------------------ persistence
 // JSON cannot hold Infinity; water sources have infinite abundance.
@@ -26,7 +27,7 @@ function load() { try { const t = localStorage.getItem(SAVE_KEY); return t ? tha
 const randomSeed = () => Math.random().toString(36).slice(2, 8);
 
 // Light, dark, or follow the device. Remembered in this browser only.
-const THEME_KEY = 'foothold-theme';
+const THEME_KEY = 'foothold-theme', SORT_KEY = 'foothold-sort';
 function applyTheme() {
   const root = document.documentElement;
   if (ui.theme === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', ui.theme);
@@ -415,38 +416,78 @@ function statusBar(lines, top) {
   ${ui.notice ? `<p class="notice" role="status">${esc(ui.notice)}</p>` : `<button class="lastlog ${S.log.length && S.log[S.log.length - 1].cls}" data-ui="overlay:journal">${esc(S.log.length ? S.log[S.log.length - 1].msg : '')}</button>`}`;
 }
 
-const projMeta = (n) => (n.repeat ? (n.ready ? 'now' : 'not now') : n.prog ? `in progress, ${fmtTime(n.total)} left` : n.ready ? (n.repeat ? 'now' : 'ready · ' + fmtTime(n.total)) : isFinite(n.total) ? `~${fmtTime(n.total)} · ${n.away} step${n.away === 1 ? '' : 's'}` : 'no known route');
+// ------------------------------------------------------------------ projects and upkeep
+const hrs = (h) => (!isFinite(h) ? '∞' : h < 0.05 ? '0' : h < 9.95 ? fmt(Math.round(h * 10) / 10) : String(Math.round(h)));
+const days = (d) => (!isFinite(d) ? '—' : d < 0.05 ? 'now' : d < 9.95 ? `${fmt(Math.round(d * 10) / 10)} d` : `${Math.round(d)} d`);
+const NEED_NAMES = { sleep: 'Sleep', food: 'Food', water: 'Water', fire: 'Fire', repairs: 'Repairs' };
+const resName = (rid) => (RESOURCES[rid].gather ? KINDS[RESOURCES[rid].gather.kind].name : RESOURCES[rid].name.toLowerCase());
 
-function selectedCard(P, rk) {
-  const n = rk.sel;
-  let lines = '', meta = projMeta(n);
-  if (n.repeat) meta = flowText(rk.flow, rk.base);
-  else if (n.recipe) {
-    const st = recipeStatus(S, n.recipe, ui.choices[n.recipe.id] || {});
-    lines = '<ul class="reqs">' + st.lines.filter((l) => !l.opt || l.ok).map((l) => {
-      const via = l.ok ? null : l.input ? n.reqs.in[l.input] : l.cap ? n.reqs.tool[l.cap] : l.res ? n.reqs.res : null;
-      const vn = via && P.node(via);
-      const link = vn ? (vn.recipe ? ` <button class="link" data-ui="proj+:${via}">› ${esc(vn.name)}</button>` : ` <span class="muted">› ${esc(vn.name.toLowerCase())}</span>`) : '';
-      return `<li class="req ${l.ok ? 'ok' : 'no'}">${esc(l.text)}${link}</li>`;
-    }).join('') + '</ul>';
+// What one need's hours are made of, in a few short lines.
+function needLines(need, up) {
+  const L = [];
+  if (need === 'food') {
+    for (const m of up.food.mix) L.push(`${m.method === 'collect' ? resName(m.rid) : `${resName(m.rid)} by ${m.method}`}${m.how.length ? ', ' + m.how.join(', ') : ''} · ${Math.round(m.kcal)} kcal · ${hrs(m.hours)} h${m.sus ? '' : ' · further afield'}`);
+    if (up.food.short) L.push(`${Math.round(up.food.short)} of ${Math.round(up.E)} kcal a day is more than regrows here, so it adds a walk out each day (counted as 1 h).`);
+    if (up.food.unmet) L.push(`No known way to get ${Math.round(up.food.unmet)} kcal a day here.`);
   }
-  const prev = ui.projBack[ui.projBack.length - 1];
-  const back = prev ? uibtn('‹', 'projBack', { cls: 'quiet small-btn' }) : '';
-  return `<div class="selcard"><div class="selhead">${back}<div class="seltitle"><span class="item-name">${esc(n.name)}</span><span class="chip ${n.ready ? 'cap' : 'warm'}">${meta}</span></div>
+  if (need === 'sleep') {
+    const sl = up.sleep;
+    L.push(`${hrs(sl.S)} h a night, ${Math.round(sl.q * 100)}% restful on average${up.nightFire ? ', by a fire' : ''}${sl.cold ? `; chilled for about ${sl.cold} h of it` : ''}.`);
+    if (sl.woke > 0.02) L.push(`On ${Math.round(sl.woke * 100)}% of nights the cold wakes you for good.`);
+    if (sl.harm > 0.05) L.push(`Cold costs about ${fmt(Math.round(sl.harm * 10) / 10)} health a night, counted here as an hour each.`);
+  }
+  if (need === 'water') L.push(`${fmt(Math.round(up.W * 10) / 10)} L a day, ${up.water.how}.`);
+  if (need === 'fire') {
+    const f = up.fire;
+    if (!f.mode) L.push('No way to make fire yet.');
+    else if (!f.F) L.push('Not worth keeping a fire at the moment.');
+    else L.push(`${hrs(f.F)} h of fire a day${up.nightFire ? ', mostly through the night' : ', for cooking and boiling'}${f.mode === 'keep' ? ', never let out (nothing to relight it with)' : f.light ? `; lighting it takes ~${hrs(f.light)} h` : ''}.`);
+    if (f.short) L.push('Some of the wood comes from further afield and has to be carried back.');
+  }
+  if (need === 'repairs') for (const x of up.repairs.list) L.push(`${KINDS[x.kind].name} · ${fmt(Math.round(x.h * 100) / 100)} h a day`);
+  return L;
+}
+
+function selectedCard(P, sel, up) {
+  let title, meta, lines = '';
+  if (sel.need) {
+    title = NEED_NAMES[sel.need]; meta = `${hrs(up.parts[sel.need])} h a day`;
+    lines = '<ul class="reqs">' + needLines(sel.need, up).map((l) => `<li>${esc(l)}</li>`).join('') + '</ul>';
+  } else {
+    title = (sel.goal ? '★ ' : '') + sel.name;
+    meta = sel.prog ? `${fmtTime(sel.needs)} left` : `needs ${hrs(sel.needs / 60)} h${sel.saves > 0.05 ? ` · saves ${hrs(sel.saves)} h/day · ${days(sel.horizon)}` : ''}`;
+    const n = sel.node;
+    if (n.recipe) {
+      const st = recipeStatus(S, n.recipe, ui.choices[n.recipe.id] || {});
+      lines = '<ul class="reqs">' + st.lines.filter((l) => !l.opt || l.ok).map((l) => {
+        const via = l.ok ? null : l.input ? n.reqs.in[l.input] : l.cap ? n.reqs.tool[l.cap] : l.res ? n.reqs.res : null;
+        const vn = via && P.node(via);
+        const link = vn ? (vn.recipe ? ` <button class="link" data-ui="proj+:${via}">› ${esc(vn.name)}</button>` : ` <span class="muted">› ${esc(vn.name.toLowerCase())}</span>`) : '';
+        return `<li class="req ${l.ok ? 'ok' : 'no'}">${esc(l.text)}${link}</li>`;
+      }).join('') + '</ul>';
+    }
+  }
+  const back = ui.projBack.length ? uibtn('‹', 'projBack', { cls: 'quiet small-btn' }) : '';
+  return `<div class="selcard"><div class="selhead">${back}<div class="seltitle"><span class="item-name">${esc(title)}</span><span class="chip ${sel.ready || sel.need ? 'cap' : 'warm'}">${meta}</span></div>
     ${uibtn('×', 'projClear', { cls: 'quiet small-btn' })}</div>${lines}</div>`;
 }
 
-function projectsPane(P, rk) {
-  const rows = rk.rest.map((n) => {
-    let meta = projMeta(n), cls = n.ready ? 'ready' : '';
-    if (rk.sel && rk.flow) { if (n.gain > 1e-6) { meta = gainText(rk.flow, n.gain) + ' · ' + meta; cls += ' helps'; } else cls += ' dim'; }
-    else if (rk.sel) { if (n.saved > 0) { meta = `saves ~${fmtTime(n.saved)} · ` + meta; cls += ' helps'; } else cls += ' dim'; }
-    if (!isFinite(n.total)) cls += ' dim';
-    const sub = rk.flow && n.gainHow ? `<small>${esc(n.gainHow)}</small>` : '';
-    return `<li><button class="row ${cls}" data-ui="proj:${n.key}"><span class="row-name">${esc(n.name)}${sub}</span><span class="row-meta">${meta}</span></button></li>`;
-  }).join('');
+function projectsPane(P, ec, sel) {
+  const up = ec.base;
+  let list = ec.rows.filter((r) => !sel || r.key !== sel.key);
+  if (sel && sel.need) list = list.filter((r) => r.by[sel.need] > 0.05).sort((a, b) => b.by[sel.need] - a.by[sel.need] || a.needs - b.needs);
+  else list.sort(SORTS[ui.sort]);
+  const rows = list.map((r) => {
+    const sub = tagsOf(r).concat(r.wait > 60 ? [`+${fmtTime(r.wait)} waiting`] : []).join(' · ');
+    return `<li><button class="row proj ${r.ready ? 'ready' : ''} ${r.goal ? 'goal' : ''}" data-ui="proj:${r.key}"><span class="row-name">${r.goal ? '★ ' : ''}${esc(r.name)}${sub ? `<small>${esc(sub)}</small>` : ''}</span>`
+      + `<span class="num">${r.prog ? '<i>…</i>' : ''}${hrs(r.needs / 60)}</span><span class="num">${hrs(r.saves)}</span><span class="num">${days(r.horizon)}</span></button></li>`;
+  }).join('') || '<li class="muted small">Nothing you know how to make would change this here.</li>';
+  const col = (k, label) => `<button class="num ${ui.sort === k && !(sel && sel.need) ? 'on' : ''}" data-ui="sort:${k}" title="sort by ${k}">${label}</button>`;
+  const needs = NEEDS.map((k) => `<button class="need ${sel && sel.need === k ? 'on' : ''}" data-ui="proj:need:${k}"><span>${NEED_NAMES[k]}</span><b>${hrs(up.parts[k])}</b></button>`).join('');
   return `<section class="pane projects" aria-label="Projects">
-    ${rk.sel ? selectedCard(P, rk) : '<h2 class="pane-h">Projects <small>by time to finish</small></h2>'}
+    <div class="upkeep"><h2 class="pane-h">Upkeep <b>${hrs(up.U)} h a day</b><small>${isFinite(up.U) && up.U < 24 ? `${hrs(24 - up.U)} h free` : 'more than a day'}</small></h2><div class="needs">${needs}</div></div>
+    ${sel ? selectedCard(P, sel, up) : ''}
+    <div class="cols"><span>Project</span>${col('needs', 'needs h')}${col('saves', 'saves h/d')}${col('horizon', 'pays in')}</div>
     <ul class="rows" id="proj-list" data-keep-scroll>${rows}</ul></section>`;
 }
 
@@ -573,20 +614,31 @@ function render() {
     if (ui.reveal) { ui.reveal = false; const d = document.getElementById('detail'); if (d) d.scrollIntoView({ block: 'nearest' }); }
     return;
   }
-  const P = makePlanner(S);
-  const list = projectList(S, P);
-  if (S.project && !list.find((n) => n.key === S.project)) S.project = null;
-  const rk = rankProjects(S, P, list, S.project);
-  if (rk.flow) rk.how = flowNow(S, rk.flow).how;
-  const tasks = taskList(S, P, rk);
+  const { P, ec } = econNow();
+  let sel = null;
+  if (S.project && S.project.startsWith('need:')) sel = { need: S.project.slice(5) };
+  else if (S.project) sel = ec.rows.find((r) => r.key === S.project) || null;
+  if (S.project && !sel) S.project = null;
+  const tasks = taskList(S, P, sel, ec.base);
   // pace the forecast on the first task that takes real time, not on a 3-minute drink
   const pace = tasks.find((x) => x.minutes >= 20) || tasks[0];
   const lines = runway(S, pace);
   app.innerHTML = `<div class="screen">${statusBar(lines, pace)}
-    ${ui.inv ? inventoryPane() : projectsPane(P, rk) + tasksPane(tasks) + stashPane()}
+    ${ui.inv ? inventoryPane() : projectsPane(P, ec, sel) + tasksPane(tasks) + stashPane()}
     ${handsBar()}</div>`;
-  if (ui.resetProjScroll) { keep['proj-list'] = 0; ui.resetProjScroll = false; }
+  if (ui.resetProjScroll) { keep['proj-list'] = 0; keep['task-list'] = 0; ui.resetProjScroll = false; }
   for (const id in keep) { const el = document.getElementById(id); if (el) el.scrollTop = keep[id]; }
+}
+
+// The planner and the upkeep evaluator are rebuilt only when the game state
+// (or the goals) changed, not on every tap that just changes the view.
+let econCache = null;
+function econNow() {
+  const key = ui.ver + '|' + S.t + '|' + S.nextId + '|' + S.at + '|' + Object.keys(S.goals).join(',');
+  const pick = S.project && !S.project.startsWith('need:') ? S.project : null;
+  if (econCache && econCache.key === key && (!pick || econCache.ec.rows.some((r) => r.key === pick))) return econCache;
+  const P = econCache && econCache.key === key ? econCache.P : makePlanner(S);
+  return (econCache = { key, P, ec: projectRows(S, P, pick && P.has(pick) ? [pick] : []) });
 }
 
 // ------------------------------------------------------------------ input
@@ -594,6 +646,7 @@ function run(cmd) {
   if (ui.busy) return;
   const t0 = S.t, n0 = S.log.length;
   const res = act(S, cmd);
+  ui.ver++;
   ui.notice = res.ok ? '' : res.msg || '';
   ui.fresh = S.log.length - n0;
   if (res.found) ui.view = res.found;
@@ -626,6 +679,7 @@ function uiAction(a, el) {
   else if (k === 'sel') { ui.sel = v || null; ui.tab = 'plan'; ui.reveal = !!v; }
   else if (k === 'planFilter') ui.planFilter = v;
   else if (k === 'goal') { if (el.checked) S.goals[v] = 1; else delete S.goals[v]; save(); }
+  else if (k === 'sort') { ui.sort = v; try { localStorage.setItem(SORT_KEY, v); } catch (e) { /* not saved; fine */ } }
   else if (k === 'proj') { S.project = S.project === v && !ui.overlay ? null : v; ui.projBack = []; ui.overlay = null; ui.inv = false; ui.resetProjScroll = true; save(); }
   else if (k === 'proj+') { if (S.project) ui.projBack.push(S.project); S.project = v; ui.resetProjScroll = true; save(); }
   else if (k === 'projBack') { S.project = ui.projBack.pop() || null; ui.resetProjScroll = true; save(); }
@@ -696,6 +750,7 @@ export function boot(saved) {
   S = saved || load();
   if (S && S.v !== 1) S = null;
   if (S && !S.goals) S.goals = {};
+  if (S && S.project) S.project = { 'x.eat': 'need:food', 'x.drink': 'need:water', 'x.sleep': 'need:sleep', 'r.add_fuel': 'need:fire' }[S.project] || S.project;
   if (S) { ui.choices = S.choices = S.choices || {}; }
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-cmd],[data-ui]');
@@ -712,6 +767,7 @@ export function boot(saved) {
   });
   setupDrag();
   try { const th = localStorage.getItem(THEME_KEY); if (th === 'light' || th === 'dark') ui.theme = th; } catch (e) { /* default */ }
+  try { const so = localStorage.getItem(SORT_KEY); if (SORTS[so]) ui.sort = so; } catch (e) { /* default */ }
   if (ui.theme !== 'auto') applyTheme();
   if (S) render(); else start();
   return () => freeze(S);

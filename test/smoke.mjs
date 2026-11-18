@@ -7,7 +7,8 @@ import { RESOURCES } from '../src/data/resources.js';
 import { reach, here, best, label } from '../src/items.js';
 import { dayOf, hourOf } from '../src/sim.js';
 import { makePlanner } from '../src/plan.js';
-import { REPEAT, projectList, rankProjects, taskList } from '../src/advice.js';
+import { taskList } from '../src/advice.js';
+import { upkeep, projectRows, NEEDS } from '../src/econ.js';
 
 let failures = 0;
 const check = (cond, msg) => { if (!cond) { failures++; console.log('  FAIL:', msg); } };
@@ -41,15 +42,29 @@ check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'stat
   check(nodes.every((n) => n.steps.length && n.steps[n.steps.length - 1].key === n.key), 'every plan ends with its own action');
 }
 
-// --- advice: every repeating need can be ranked against every project
+// --- upkeep: finite, made of its parts, and projects that save something
 {
-  const P = makePlanner(a);
-  const list = projectList(a, P);
-  for (const key of Object.keys(REPEAT)) {
-    const rk = rankProjects(a, P, list, key);
-    check(rk.rest.every((n) => isFinite(n.gain)), `ranking for ${key} produced a non-number`);
-    taskList(a, P, rk);
-  }
+  const s = newGame(seed);
+  for (let i = 0; i < 3; i++) act(s, { t: 'survey' });
+  const u = upkeep(s);
+  check(NEEDS.every((k) => u.parts[k] >= 0 && !isNaN(u.parts[k])), 'upkeep parts must be non-negative numbers: ' + JSON.stringify(u.parts));
+  check(Math.abs(u.U - NEEDS.reduce((a, k) => a + u.parts[k], 0)) < 1e-9, 'upkeep must be the sum of its parts');
+  check(u.sleep.S >= 4 && u.sleep.S <= 14, 'sleep hours out of range: ' + u.sleep.S);
+  const P = makePlanner(s);
+  const { base, rows } = projectRows(s, P);
+  check(rows.length >= 5, 'expected several projects that cut upkeep, got ' + rows.length);
+  check(rows.every((r) => !isNaN(r.saves) && !isNaN(r.horizon) && r.needs > 0), 'project rows must have numbers');
+  check(rows.some((r) => r.by.sleep > 0.5), 'some project should cut sleep (a bed or shelter)');
+  // a better bed means less sleep, all else equal
+  const bed = upkeep(s, ['bed']), raised = upkeep(s, ['raised_bed']);
+  check(bed.parts.sleep < base.parts.sleep && raised.parts.sleep < bed.parts.sleep, 'better bedding should cut sleep in order');
+  // nothing is free: a project's saving is never more than the whole upkeep
+  check(rows.every((r) => r.saves <= base.U + 1e-9), 'a project cannot save more than the upkeep');
+  for (const sel of [null, ...NEEDS.map((need) => ({ need })), rows[0]]) taskList(s, P, sel, base);
+  // determinism: evaluating upkeep must not touch the game state
+  const before = JSON.stringify(s);
+  upkeep(s, ['hearth', 'bark_basin']);
+  check(JSON.stringify(s) === before, 'upkeep must not change the game state');
 }
 
 // --- a greedy bot: tries to stay alive and make everything it can

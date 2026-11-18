@@ -26,8 +26,9 @@ import { genLocation, prospect } from './world.js';
 import { stream, rand, randn, clamp } from './util.js';
 
 // ------------------------------------------------------------------ static tables (built once from the library)
-const kindsFor = (spec) => (spec.kind ? [spec.kind] : Object.keys(KINDS).filter((k) => KINDS[k].tags.includes(spec.tag)));
-const unitsOf = (spec, kind) => (spec.kg != null ? spec.kg / KINDS[kind].mass : spec.n);
+const tagKinds = {};
+export const kindsFor = (spec) => (spec.kind ? [spec.kind] : tagKinds[spec.tag] || (tagKinds[spec.tag] = Object.keys(KINDS).filter((k) => KINDS[k].tags.includes(spec.tag))));
+export const unitsOf = (spec, kind) => (spec.kg != null ? spec.kg / KINDS[kind].mass : spec.n);
 
 // A representative instance of a kind: default qualities, default parts.
 const typicalCache = {};
@@ -86,7 +87,7 @@ function tables() {
   for (const kind in KINDS) {
     const k = KINDS[kind];
     if (kind === 'project') continue;
-    for (const cap of Object.keys(k.caps || {}).concat(k.cont ? ['vessel', 'bag', 'leach'] : [])) {
+    for (const cap of Object.keys(k.caps || {}).concat(k.cont ? ['vessel', 'bag', 'leach', 'fireproof'] : [])) {
       const level = capOf(typical(kind), cap);
       if (level > 0) (capKinds[cap] = capKinds[cap] || []).push({ kind, level });
     }
@@ -98,6 +99,14 @@ function tables() {
 
 // Kinds of thing a recipe makes, and the capability levels a typical one has.
 export const outputsOf = (rid) => tables().outputs[rid] || [];
+// What one batch of a recipe yields on average, kind by kind (traps excluded).
+const yieldCache = {};
+export function yieldsOf(rid) {
+  if (yieldCache[rid]) return yieldCache[rid];
+  const out = (yieldCache[rid] = []);
+  for (const kind of outputsOf(rid)) for (const p of tables().producers[kind]) if (p.rid === rid && !p.trap) out.push({ kind, n: p.n, wait: p.wait });
+  return out;
+}
 export function capsFromRecipe(rid) {
   const out = {};
   for (const kind of outputsOf(rid)) for (const cap in tables().capKinds) {
@@ -150,11 +159,13 @@ export function exploreOdds(seed) {
 }
 
 // ------------------------------------------------------------------ the planner for one moment of one game
-export function makePlanner(s) {
+// `extra` ({cap: level}) pretends you already hold those capabilities: used
+// to price a goal as it would be after some other project.
+export function makePlanner(s, extra = null) {
   const T = tables(), L = here(s), odds = exploreOdds(s.seed);
   const capLv = {}, whereMemo = {}, optMemo = {}, nodeMemo = {}, statusMemo = {};
   const stack = new Set();
-  const capNow = (cap) => (capLv[cap] != null ? capLv[cap] : (capLv[cap] = capInfo(s, cap).level));
+  const capNow = (cap) => (capLv[cap] != null ? capLv[cap] : (capLv[cap] = Math.max(capInfo(s, cap).level, (extra && extra[cap]) || 0)));
   const status = (rid) => statusMemo[rid] || (statusMemo[rid] = recipeStatus(s, RECIPES[rid], (s.choices || {})[rid] || {}));
   const enough = (rid, r) => r && r.known && (r.cap === Infinity || !RESOURCES[rid].gather || r.amt >= (KINDS[RESOURCES[rid].gather.kind].unit === 'ea' ? 1 : 0.05));
 

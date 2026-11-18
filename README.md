@@ -45,7 +45,8 @@ commands give byte-identical state, and reports how the bot fared.
 | `src/sim.js` | Passage of time: body, weather, decay, fires, traps, regrowth |
 | `src/actions.js` | Commands: the only way state changes |
 | `src/plan.js` | Planner: cheapest known route to any action |
-| `src/advice.js` | Project ranking, repeating-need rates, task list, what runs out first |
+| `src/econ.js` | Upkeep (hours a day to stay alive here) and what each project would save |
+| `src/advice.js` | Task list, what runs out first |
 | `src/ui.js` | The page: status, projects, tasks, ground, hands, inventory. No rules live here |
 | `test/smoke.mjs` | Headless bot |
 | `tools/bundle.mjs` | Single-file bundler |

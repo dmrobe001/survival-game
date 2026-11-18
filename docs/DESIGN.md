@@ -78,15 +78,19 @@ the top.
 Top to bottom: the reserve that runs out first, projects, tasks you can do
 now, what is on the ground, and your two hands.
 
-- **Projects** are recipes plus eating, drinking and sleeping; collecting
-  and travel are tasks, not projects. Unselected, they sort by estimated
-  time to finish. With a one-off project selected, the others sort by
-  *saving*: the minutes of the selected project's planned route that their
-  own route covers. This is exact under the plan but blind to shortcuts the
-  plan did not take. With a repeating need selected (eat, drink, sleep, feed
-  the fire), they sort by how much what they make would raise that rate
-  (kcal per hour of foraging, how restful sleep is, water purity, hours of
-  fire per hour of wood-gathering), holding everything else fixed.
+- **Upkeep** heads the projects panel: the hours a day that staying alive
+  here costs, split into sleep, food, water, fire and repairs (see
+  *Upkeep* below). Tap a need to see what its hours are made of; the
+  projects then sort by how much they cut that need.
+- **Projects** are techniques, and collecting things that work as tools
+  (a cobble is a hammerstone), shown with three numbers: *needs*, the hours
+  of work to do it once by its planned route from where you stand; *saves*,
+  the hours of upkeep a day it would take off, with everything that route
+  leaves you holding; and *pays in*, needs ÷ saves in days. Tap a column to
+  sort by it. Projects that change nothing are left out, and so is any
+  project that only repeats a quicker one's gains with extra steps. The
+  route is the bundle: "Boil water" needs the fire and the basin too, and
+  saves what having all of them saves.
 - **Tasks** are only what one tap can do now. Steps on the selected
   project's route come first, in route order.
 - **The status bar** shows reserves in two zones, split by a comfort line
@@ -114,6 +118,56 @@ now, what is on the ground, and your two hands.
   otherwise the thing held longest is set down. Only one hand's worth is
   picked up per action. Toolstone is now a lump measured in kilograms that
   knapping wears down.
+
+## Upkeep (src/econ.js)
+
+A survivor's progress is measured as the hours a day that staying alive
+takes, and every project is judged by how much it cuts them.
+
+    U = sleep + food + water + fire + repairs      (hours a day, at this place)
+
+Only the body's needs are demanded directly: energy, water, rest and
+warmth. Everything else is derived demand and reaches U through *prices*,
+the hours it takes to make one more unit of a thing with what you have.
+
+**Prices, from the ground up.** Start from what can be collected here
+(hours per unit = 1 / collecting rate). Then let every recipe whose tools
+you have offer its products at (time + tool wear + fire + inputs) / yield,
+keep the cheapest offer for each kind, and repeat until nothing changes.
+This is Knuth's 1977 generalisation of Dijkstra's algorithm to AND/OR
+graphs, run in Bellman–Ford order. Its known weakness: a recipe with
+several products charges its whole cost to each, so joint products (a
+butchered deer) are over-priced one by one; linear programming would split
+them exactly.
+
+**Long-run supply.** Each resource regrows logistically, so the most it
+can give for ever is its maximum sustainable yield, about
+1.06 × regen × capacity a day. The first half of that is taken at 85%
+abundance, the second half at 60%. More than that comes "from further
+afield": country like this (the fields vary smoothly) at the same rates,
+for a daily walk (1 h, a guess) and, for firewood, the trips to carry it
+home with whatever you can carry. Food is filled cheapest first, choosing
+between living off what regrows here and walking out each day.
+
+**Each need.**
+
+| Need | How its hours are found |
+| --- | --- |
+| Sleep | Fatigue builds at 3.2 an hour awake and clears at 12 × quality an hour asleep, so sleep = 24·3.2 / (12q + 3.2). Quality comes from bed, shelter and roof, and from a night simulated hour by hour (same chill rules as the game) for each kind of weather: chill past 40 spoils sleep, past 85 wakes you for good, past 70 costs health, charged at 1 h per point (a guess). |
+| Food | Energy at 70 kcal/h × metabolic rate (0.95 asleep, 2.2 awake). Each resource offers its food by its best route (raw, roasted, boiled, pounded, leached, dried, butchered), costing collecting, hands-on processing, and illness: each bout of gut sickness is charged 10 h (a guess). A carcass spoils faster than you can eat it unless dried or kept cool. |
+| Water | 0.1 L/h asleep and about 0.25 L/h awake; drinking as it is (illness odds from purity) or boiling, whichever costs less; a walk if there is no water here. |
+| Fire | Hours of burning a day (all night if sleeping by a fire is cheaper overall, otherwise just cooking and boiling) × wood per hour, plus lighting it once a day by friction (failed attempts wear the spindle and board). With a fire but nothing to relight it, it must burn all day. |
+| Repairs | Things that rot by the day (bedding, thatch, baskets) last until half gone, then cost their material plus refitting. |
+
+**A project's saving** is U now minus U with everything its planned route
+makes or collects (less what a later step uses up). Goals add a one-off
+term: the hours a project takes off your ticked goals, so
+pays-in = (needs − goal hours saved) / saves.
+
+What is reproducible: given a state, every number here is deterministic
+and the evaluator never changes the state (tested). What is guessed: the
+1 h walk, 10 h per sickness, 1 h per health point, and the 85%/60%
+abundance split are judgment calls; the rest follows the game's own rules.
 
 ## Time
 
@@ -145,6 +199,11 @@ hearth; drying rack; earth oven; pit kiln; charcoal mound; seep well; storage
 pit; clay-lined and hide-lined basin pits; fish weir; dugout trough.
 
 ## Suggested next steps
+
+- **Upkeep, next:** tool wear by the hour of use is in, but resharpening
+  is not; daytime cold is ignored; bringing resources from other known
+  places (and so the value of better transport) is approximated by the
+  fixed daily walk.
 
 - **Seasons.** A day-of-year term in temperature and in each resource's
   habitat (acorns in autumn, eggs in spring) turns storage from an option

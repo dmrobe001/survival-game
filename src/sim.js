@@ -28,6 +28,7 @@ const NEXT = {
   rain: ['cloudy', 'cloudy', 'rain', 'storm'], storm: ['rain', 'cloudy'],
 };
 const DT = { clear: 1, cloudy: 0, rain: -3, storm: -5 };
+export const WEATHER = { NEXT, DT };
 function tickWeather(s) {
   if (s.t < s.weather.until) return;
   const kind = pick(s.rng, NEXT[s.weather.kind]);

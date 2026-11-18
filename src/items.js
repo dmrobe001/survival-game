@@ -97,6 +97,7 @@ export function capOf(it, cap) {
     if (cap === 'vessel' && c.liquid) return (c.vol * c.ret) / 100;      // litres it can usefully hold
     if (cap === 'leach' && c.liquid && c.ret > 0) return (c.vol * c.ret) / 100;        // soak, pour off, repeat
     if (cap === 'leach' && !c.liquid && c.mesh === 0 && !k.open && !k.fixed) return c.vol; // a closed bag sunk in a stream
+    if (cap === 'fireproof' && c.liquid && c.fireproof) return c.vol;                 // a pot that can sit on the fire
     if (cap === 'bag' && !c.liquid && c.mesh <= 1 && !k.fixed) return Math.min(c.vol, 30); // litres of loose small stuff you can carry while picking
   }
   return 0;

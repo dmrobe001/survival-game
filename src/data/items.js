@@ -216,7 +216,7 @@ const food = (id, name, kcal, o = {}) => {
   K(id, Object.assign({ name, unit: 'kg', vol: 1.3, grain: 2, hand: 0.25, q: { fresh: 100 }, decay: { fresh: o.rot == null ? 10 : o.rot } }, o.kind || {},
     o.inedible ? {} : { food: f }, { roast: o.roast, boil: o.boil, crush: o.crush, soak: o.soak, dry: o.dry }));
 };
-food('berries', 'berries', 550, { water: 0.8, portion: 0.4, rot: 18, kind: { grain: 1, hand: 0.15 }, dry: { to: 'dried_berries', y: 0.22, hours: 48 } });
+food('berries', 'berries', 550, { water: 0.8, portion: 0.4, rot: 18, kind: { grain: 1, hand: 0.15 }, dry: { to: 'dried_berries', y: 0.19, hours: 48 } });
 food('dried_berries', 'dried berries', 2900, { portion: 0.15, rot: 0.5, kind: { grain: 0.8 } });
 food('greens', 'greens', 250, { water: 0.85, portion: 0.3, rot: 30, kind: { grain: 5, vol: 5, hand: 0.1 }, boil: { to: 'boiled_greens', y: 0.9 } });
 food('boiled_greens', 'boiled greens', 300, { water: 0.8, rot: 35 });
