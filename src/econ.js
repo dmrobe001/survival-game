@@ -27,9 +27,9 @@
 
 import { KINDS } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
-import { RECIPES } from './data/recipes.js';
+import { RECIPES, CAP_NAMES } from './data/recipes.js';
 import { capOf, contSpec, reach, here } from './items.js';
-import { travelInfo } from './actions.js';
+import { travelInfo, planInput } from './actions.js';
 import { typical, sample, yieldsOf, outputsOf, kindsFor, unitsOf, makePlanner } from './plan.js';
 import { WEATHER } from './sim.js';
 import { pieceSpread, piecesIn, bestOf } from './tiers.js';
@@ -534,7 +534,7 @@ const useful = (kind) => { const k = KINDS[kind]; return !!(k.caps || k.cont || 
 // leaves a tool over. Collected things are as good as the deposit they come
 // from (soft cobbles make a poor hammer); made things are typical.
 function gainedKinds(s, P, n) {
-  const made = [], picked = {}, recipes = n.steps.filter((st) => st.key[0] === 'r').map((st) => RECIPES[st.key.slice(2)]);
+  const made = [], picked = {}, mats = new Set(), recipes = n.steps.filter((st) => st.key[0] === 'r').map((st) => RECIPES[st.key.slice(2)]);
   for (const st of n.steps) {
     let kinds = [], q = null;
     if (st.key[0] === 'r') kinds = outputsOf(st.key.slice(2));
@@ -546,16 +546,33 @@ function gainedKinds(s, P, n) {
         if (!(g.kind in picked) || q) picked[g.kind] = q;
       }
     }
-    for (const k of kinds) if (useful(k) && !made.includes(k)) made.push(k);
+    for (const k of kinds) { mats.add(k); if (useful(k) && !made.includes(k)) made.push(k); }
   }
   const piece = (k) => (k in picked ? sample(k, picked[k]) : typical(k));
+  // Something built is made of what the route collects or what you already
+  // have to hand (a windbreak of leaf litter, not of an average covering).
+  const built = (kind) => {
+    const k = KINDS[kind];
+    if (!k.slots) return piece(kind);
+    const it = { id: 0, kind, n: 1, q: Object.assign({}, k.q), parts: {} };
+    for (const sl in k.slots) {
+      const spec = k.slots[sl];
+      if (spec.opt) continue;
+      const cands = kindsFor(spec), have = planInput(s, spec, null);
+      const pk = cands.find((c) => mats.has(c)) || (have.kind && cands.includes(have.kind) ? have.kind : cands[0]);
+      it.parts[sl] = { id: 0, kind: pk, n: unitsOf(spec, pk), q: Object.assign({}, (have.kind === pk && have.first ? have.first : piece(pk)).q, spec.q || {}) };
+    }
+    return it;
+  };
   const asTool = (k) => k in picked && recipes.some((r) => r.tools.some((t) => !t.opt && capOf(piece(k), t.cap) >= t.min));
   const used = new Set();
   for (const r of recipes) {
     for (const spec of r.in) if (!spec.keep && !spec.opt) for (const k of kindsFor(spec)) if (made.includes(k) && !asTool(k) && !outputsOf(r.id).includes(k)) used.add(k);
   }
   const kinds = made.filter((k) => !used.has(k) && k !== 'project');
-  return { kinds, items: kinds.map(piece), sig: kinds.map((k) => k + (picked[k] ? JSON.stringify(picked[k]) : '')).sort().join(',') };
+  const items = kinds.map(built);
+  const sig = items.map((it) => it.kind + (picked[it.kind] ? JSON.stringify(picked[it.kind]) : '') + (it.parts ? '[' + Object.values(it.parts).map((p) => p.kind).join('+') + ']' : '')).sort().join(',');
+  return { kinds, items, sig };
 }
 // The best piece a half-hour's collecting typically turns up: the deposit's
 // mean plus its scatter times the expected largest of that many draws.
@@ -595,6 +612,17 @@ export function projectRows(s, P, include = []) {
     const goal = !!(s.goals && s.goals[key]);
     if (!prog && (!isFinite(n.total) || n.unknown || n.passive)) continue;
     const gi = gainedKinds(s, P, n), gained = gi.kinds;
+    // Remaking something you already have only helps if the new one is better.
+    let note = '';
+    for (const it of gi.items) {
+      const mine = baseItems.filter((x) => x.kind === it.kind);
+      if (!mine.length) continue;
+      for (const cap of ALLCAPS) {
+        const a = Math.max(...mine.map((x) => capOf(x, cap))), b = capOf(it, cap);
+        if (b > a + 0.5) { note = `better than yours: ${CAP_NAMES[cap] || cap} ${Math.round(b)} vs ${Math.round(a)}`; break; }
+      }
+      if (!note) note = `you have one; ${mine.some((x) => (x.q.integrity ?? 100) < 60 || Object.values(x.parts || {}).some((p) => (p.q.integrity ?? 100) < 60)) ? 'yours is wearing out' : 'a second adds little'}`;
+    }
     let ev = cache.get(gi.sig);
     if (!ev) {
       const u = gained.length ? upkeep(s, gi.items, baseItems) : base;
@@ -611,7 +639,7 @@ export function projectRows(s, P, include = []) {
     const needs = prog ? prog.proj.left : labor(n);
     const nh = needs / 60;
     const horizon = ev.saves > 1e-6 ? Math.max(0, (nh - ev.oneoff) / ev.saves) : ev.oneoff >= nh - 1e-9 && ev.oneoff > 0 ? 0 : Infinity;
-    rows.push({ key, rid, name: n.name, node: n, prog, goal, ready: n.ready || !!prog, needs, wait: prog ? 0 : waitOf(n), saves: ev.saves, by: ev.by, oneoff: ev.oneoff, horizon, gained, after: ev.u, why: ev.why });
+    rows.push({ key, rid, name: n.name, node: n, prog, goal, ready: n.ready || !!prog, needs, wait: prog ? 0 : waitOf(n), saves: ev.saves, by: ev.by, oneoff: ev.oneoff, horizon, gained, after: ev.u, why: ev.why, note });
   }
   const EPS = 0.05;
   const pinned = (r) => r.goal || r.prog || include.includes(r.key);
@@ -632,7 +660,8 @@ export const SORTS = {
 // The biggest change gets a reason: what you would do differently.
 export function tagsOf(row) {
   return NEEDS.filter((k) => Math.abs(row.by[k]) >= 0.05).sort((a, b) => Math.abs(row.by[b]) - Math.abs(row.by[a])).slice(0, 2)
-    .map((k, i) => `${k} ${row.by[k] > 0 ? '−' : '+'}${isFinite(row.by[k]) ? fmt(Math.abs(row.by[k])) : '∞'}${i === 0 && row.why && row.why[k] ? ` (${row.why[k]})` : ''}`);
+    .map((k, i) => `${k} ${row.by[k] > 0 ? '−' : '+'}${isFinite(row.by[k]) ? fmt(Math.abs(row.by[k])) : '∞'}${i === 0 && row.why && row.why[k] ? ` (${row.why[k]})` : ''}`)
+    .concat(row.note ? [row.note] : []);
 }
 const foodName = (m) => {
   const g = RESOURCES[m.rid].gather, name = g ? KINDS[g.kind].name.replace(/ in shell$/, '') : RESOURCES[m.rid].name.toLowerCase();
