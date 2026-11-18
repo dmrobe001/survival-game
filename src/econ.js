@@ -597,13 +597,13 @@ export function projectRows(s, P, include = []) {
       }
       const by = {};
       for (const k of NEEDS) by[k] = diff(base.parts[k], u.parts[k]);
-      ev = { u, oneoff, by, saves: diff(base.U, u.U) };
+      ev = { u, oneoff, by, saves: diff(base.U, u.U), why: reasons(base, u) };
       cache.set(gi.sig, ev);
     }
     const needs = prog ? prog.proj.left : labor(n);
     const nh = needs / 60;
     const horizon = ev.saves > 1e-6 ? Math.max(0, (nh - ev.oneoff) / ev.saves) : ev.oneoff >= nh - 1e-9 && ev.oneoff > 0 ? 0 : Infinity;
-    rows.push({ key, rid, name: n.name, node: n, prog, goal, ready: n.ready || !!prog, needs, wait: prog ? 0 : waitOf(n), saves: ev.saves, by: ev.by, oneoff: ev.oneoff, horizon, gained, after: ev.u });
+    rows.push({ key, rid, name: n.name, node: n, prog, goal, ready: n.ready || !!prog, needs, wait: prog ? 0 : waitOf(n), saves: ev.saves, by: ev.by, oneoff: ev.oneoff, horizon, gained, after: ev.u, why: ev.why });
   }
   const EPS = 0.05;
   const pinned = (r) => r.goal || r.prog || include.includes(r.key);
@@ -621,7 +621,22 @@ export const SORTS = {
 };
 
 // The one or two needs a project helps (or costs) most, in words.
+// The biggest change gets a reason: what you would do differently.
 export function tagsOf(row) {
   return NEEDS.filter((k) => Math.abs(row.by[k]) >= 0.05).sort((a, b) => Math.abs(row.by[b]) - Math.abs(row.by[a])).slice(0, 2)
-    .map((k) => `${k} ${row.by[k] > 0 ? '−' : '+'}${isFinite(row.by[k]) ? fmt(Math.abs(row.by[k])) : '∞'}`);
+    .map((k, i) => `${k} ${row.by[k] > 0 ? '−' : '+'}${isFinite(row.by[k]) ? fmt(Math.abs(row.by[k])) : '∞'}${i === 0 && row.why && row.why[k] ? ` (${row.why[k]})` : ''}`);
+}
+const foodName = (m) => {
+  const g = RESOURCES[m.rid].gather, name = g ? KINDS[g.kind].name.replace(/ in shell$/, '') : RESOURCES[m.rid].name.toLowerCase();
+  return [m.method === 'collect' ? name : `${name} by ${m.method}`].concat(m.how).join(', ');
+};
+function reasons(base, u) {
+  const out = {};
+  const main = (f) => f.mix.slice().sort((a, b) => b.kcal - a.kcal)[0];
+  const a = main(base.food), b = main(u.food);
+  if (b && (!a || foodName(a) !== foodName(b))) out.food = 'mostly ' + foodName(b);
+  if (Math.abs(u.sleep.q - base.sleep.q) > 0.01) out.sleep = `sleep ${Math.round(base.sleep.q * 100)}→${Math.round(u.sleep.q * 100)}% restful`;
+  if (u.water.how !== base.water.how) out.water = u.water.how;
+  if (u.nightFire !== base.nightFire) out.fire = u.nightFire ? 'a fire all night' : 'no night fire';
+  return out;
 }
