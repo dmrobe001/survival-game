@@ -48,7 +48,10 @@ commands give byte-identical state, and reports how the bot fared.
 | `src/econ.js` | Upkeep (hours a day to stay alive here) and what each project would save |
 | `src/advice.js` | Task list, what runs out first |
 | `src/ui.js` | The page: status, projects, tasks, ground, hands, inventory. No rules live here |
-| `test/smoke.mjs` | Headless bot |
+| `src/tiers.js` | Quality tiers: the lines recipes test, piece odds |
+| `test/smoke.mjs` | Headless bot and checks |
+| `test/calibration.mjs` | Benchmarks: whole-task times the numbers must reproduce |
+| `tools/benchmarks.mjs`, `tools/calibrate.mjs` | Benchmark definitions; `npm run calibrate` writes [docs/CALIBRATION.md](docs/CALIBRATION.md) |
 | `tools/bundle.mjs` | Single-file bundler |
 
 To add content you usually touch only `src/data/`. See

@@ -12,9 +12,36 @@
 
 import { KINDS, UNIT } from './data/items.js';
 import { clamp, fmt } from './util.js';
-import { tiersOf, tierWords } from './tiers.js';
+import { tiersOf, tierWords, tierKey } from './tiers.js';
 
 export const kindOf = (it) => KINDS[it.kind];
+
+// ---- pieces
+// Countable things (cobbles, poles, flakes) keep every piece's own
+// qualities in `it.ps`, an array of quality objects, one per piece; `it.q`
+// is their mean, kept for display. A stack holds pieces of one tier only
+// (see tiers.js), so the mean is on the same side of every tested line as
+// each piece. Without `ps`, all n pieces are taken to be alike.
+export const pieceKind = (kind) => { const k = KINDS[kind]; return k.unit === 'ea' && !k.food && !k.slots && !k.cont && !k.fixed && !k.lump && !k.trap && !k.worn && !k.liquid; };
+export const piecesOf = (it) => it.ps || Array.from({ length: Math.max(0, Math.round(it.n)) }, () => Object.assign({}, it.q));
+export function setPieces(it, ps) {
+  it.ps = ps; it.n = ps.length;
+  if (!ps.length) return it;
+  const q = {};
+  for (const key of new Set(ps.flatMap((p) => Object.keys(p)))) q[key] = Math.round((ps.reduce((a, p) => a + (p[key] ?? 0), 0) / ps.length) * 10) / 10;
+  it.q = q;
+  return it;
+}
+// How good a piece is, for choosing which to use first: the sum of the
+// qualities some rule tests.
+export function pieceScore(kind, q) {
+  const t = tiersOf(kind);
+  if (!t) return q.integrity ?? 0;
+  return Object.keys(t.q).reduce((a, key) => a + (q[key] ?? 0), 0);
+}
+// New item ids for pieces split off inside addTo; act() points this at the game.
+export const ids = { s: null };
+const newId = () => (ids.s ? ids.s.nextId++ : 1e9 + Math.floor(Math.random() * 1e9));
 
 export function mk(s, kind, n = 1, q = {}) {
   const k = KINDS[kind];
@@ -92,7 +119,10 @@ export function roomFor(cont, it) {
 export function capOf(it, cap) {
   const k = kindOf(it);
   if (it.proc || it.proj || missingSlots(it).length) return 0;
-  if (k.caps && k.caps[cap]) return Math.max(0, k.caps[cap](it));
+  if (k.caps && k.caps[cap]) {
+    if (it.ps) return Math.max(0, ...it.ps.map((p) => k.caps[cap]({ kind: it.kind, n: 1, q: p })));
+    return Math.max(0, k.caps[cap](it));
+  }
   const c = k.cont && contSpec(it);
   if (c) {
     if (cap === 'vessel' && c.liquid) return (c.vol * c.ret) / 100;      // litres it can usefully hold
@@ -133,13 +163,34 @@ export function canMerge(a, b) {
 export const tierLabel = (it) => tierWords(it, capOf);
 
 // Add an item to an array, merging into a similar stack when one exists.
-// Qualities of a merged stack are the amount-weighted mean.
+// Qualities of a merged stack are the amount-weighted mean, except that
+// countable pieces keep their own qualities. Pieces of several tiers (the
+// frame poles of a dismantled hut) are sorted into a stack per tier; the
+// best tier's stack is returned.
 export function addTo(list, it) {
+  if (it.ps && it.ps.length > 1) {
+    const groups = {};
+    for (const p of it.ps) (groups[tierKey({ kind: it.kind, q: p })] = groups[tierKey({ kind: it.kind, q: p })] || []).push(p);
+    const keys = Object.keys(groups);
+    if (keys.length > 1) {
+      const order = keys.sort((a, b) => pieceScore(it.kind, groups[b][0]) - pieceScore(it.kind, groups[a][0]));
+      let first = null;
+      order.forEach((key, i) => {
+        const part = setPieces(i === 0 ? it : { id: newId(), kind: it.kind, n: 0, q: {} }, groups[key]);
+        const placed = addTo(list, part);
+        if (!first) first = placed;
+      });
+      return first;
+    }
+  }
   for (const o of list) {
     if (canMerge(o, it)) {
-      const tot = o.n + it.n;
-      for (const key in o.q) o.q[key] = Math.round(((o.q[key] * o.n + (it.q[key] ?? 0) * it.n) / tot) * 10) / 10;
-      o.n = tot;
+      if (pieceKind(o.kind) && (o.ps || it.ps)) setPieces(o, piecesOf(o).concat(piecesOf(it)));
+      else {
+        const tot = o.n + it.n;
+        for (const key in o.q) o.q[key] = Math.round(((o.q[key] * o.n + (it.q[key] ?? 0) * it.n) / tot) * 10) / 10;
+        o.n = tot;
+      }
       list.splice(list.indexOf(o), 1); // a topped-up stack counts as the newest thing in the list
       list.push(o);
       return o;
@@ -150,10 +201,32 @@ export function addTo(list, it) {
 }
 
 // Split n units off a stack as a new item (the caller must place it).
-export function split(s, it, n) {
+// Countable pieces leave best first ('best', for using as a tool) or worst
+// first ('worst', using up the least good pieces that will do).
+export function split(s, it, n, order = 'best') {
+  if (pieceKind(it.kind) && it.n > 1) {
+    const sign = order === 'worst' ? 1 : -1;
+    const ps = piecesOf(it).sort((a, b) => sign * (pieceScore(it.kind, a) - pieceScore(it.kind, b)));
+    const k = Math.round(n);
+    const piece = setPieces({ id: s.nextId++, kind: it.kind, n: 0, q: {} }, ps.slice(0, k));
+    setPieces(it, ps.slice(k));
+    if (piece.n === 1) { piece.q = piece.ps[0]; delete piece.ps; }
+    if (it.n === 1) { it.q = it.ps[0]; delete it.ps; }
+    return piece;
+  }
   const piece = { id: s.nextId++, kind: it.kind, n, q: Object.assign({}, it.q) };
   it.n = Math.round((it.n - n) * 1e6) / 1e6;
   return piece;
+}
+
+// The piece of a stack that gives the most of a capability (the one you
+// would pick up to use), as an index into its pieces.
+export function bestPieceFor(it, cap) {
+  const k = kindOf(it);
+  if (!it.ps || !k.caps || !k.caps[cap]) return -1;
+  let top = -1, v = -1;
+  it.ps.forEach((p, i) => { const c = k.caps[cap]({ kind: it.kind, n: 1, q: p }); if (c > v) { v = c; top = i; } });
+  return top;
 }
 
 // ---- the tree

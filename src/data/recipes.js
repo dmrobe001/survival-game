@@ -58,7 +58,7 @@ R({ id: 'grind_celt', name: 'Peck and grind an axe head', group: 'Stone', time: 
   in: [{ id: 'blank', kind: 'cobble', n: 1, q: { hardness: 55 }, prefer: 'hardness' }],
   make: (c) => c.give('celt', 1, { sharpness: 35 + 0.3 * Q(c.ins.blank, 'hardness'), integrity: 100 }) });
 R({ id: 'resharpen', name: 'Resharpen an edge', group: 'Stone', time: 15,
-  desc: 'Retouch a dulled edge. Each resharpening eats a little of the tool. (Take a hafted tool apart first.)',
+  desc: 'Retouch a dulled edge. Each resharpening flakes away some of the stone (shown as integrity). (Take a hafted tool apart first.)',
   tools: [{ cap: 'pound', min: 30 }],
   in: [{ id: 'edge', tag: 'edge', n: 1, keep: true, qmax: { sharpness: 60 } }],
   make: (c) => { const e = c.ins.edge; e.q.sharpness = Math.min(75, e.q.sharpness + 25); e.q.integrity = Math.max(1, e.q.integrity - 12); } });
@@ -89,11 +89,28 @@ R({ id: 'gorge', name: 'Carve a gorge hook', group: 'Hide and bone', time: 25,
   desc: 'A double-pointed sliver that turns sideways in a fish\'s throat.',
   make: (c) => c.give('gorge', 1) });
 
+// ================================================================ touching up materials
+// Each improves one quality at the cost of another: there is no free repair.
+R({ id: 'straighten', name: 'Straighten a pole or shaft', group: 'Tools', time: 25,
+  desc: 'Shave off the knots and bumps and true the curve, over coals if you can (heat lets wood bend and set). Every shaving takes girth, so it comes out weaker.',
+  tools: [{ cap: 'scrape', min: 15 }, { cap: 'fire', min: 1, opt: true }],
+  in: [{ id: 'wood', tag: 'straightenable', n: 1, keep: true, qmax: { straightness: 80 } }],
+  make: (c) => {
+    const w = c.ins.wood;
+    w.q.straightness = Math.min(90, w.q.straightness + (c.lvl('fire') >= 1 ? 25 : 15));
+    if (w.q.strength != null) w.q.strength = Math.max(5, w.q.strength - 8);
+    if (w.q.hardness != null) w.q.hardness = Math.max(5, w.q.hardness - 3);
+  } });
+
 // ================================================================ fiber
 R({ id: 'cordage', name: 'Twist cordage', group: 'Fiber', time: 60, met: 1.8,
   desc: 'Reverse-wrap fiber into two-ply cord: about five metres an hour.',
   in: [{ id: 'fiber', tag: 'fiber', n: 0.05, max: 0.1, prefer: 'strength' }], scale: 'fiber',
   make: (c) => c.give('cordage', 100 * c.ins.fiber.n, { strength: Q(c.ins.fiber, 'strength') + 4 * c.rn(), integrity: Q(c.ins.fiber, 'integrity') }) });
+R({ id: 'retwist', name: 'Retwist cordage', group: 'Fiber', time: 3, met: 1.8,
+  desc: 'Untwist worn cord, splice in fresh fibre, and twist it tight again: stronger and sound, for a little more fibre.',
+  in: [{ id: 'cord', kind: 'cordage', n: 1, max: 10, qmax: { strength: 75 } }, { id: 'fiber', tag: 'fiber', kg: 0.01 }], scale: 'cord',
+  make: (c) => c.give('cordage', c.ins.cord.n, { strength: Math.min(80, Q(c.ins.cord, 'strength') + 10), integrity: 100 }) });
 R({ id: 'shred_bark', name: 'Shred bark into fiber', group: 'Fiber', time: 20, met: 2,
   desc: 'Pound and strip the inner bark. Weaker than nettle or dogbane, but bark is everywhere.',
   tools: [{ cap: 'pound', min: 20 }], in: [{ id: 'bark', kind: 'bark_sheet', n: 1 }],
@@ -238,10 +255,10 @@ R({ id: 'waterskin', name: 'Sew a waterskin', group: 'Containers', time: 60, met
   make: (c) => c.give('waterskin', 1, { size: 3, retention: c.ins.seal ? 92 : 74, integrity: Q(c.ins.hide, 'integrity') }) });
 R({ id: 'pack_frame', name: 'Lash a pack frame', group: 'Containers', time: 60,
   desc: 'A ladder-like frame for the back. Bulky things are tied on; small loose things need a bag first.',
-  in: [{ id: 'poles', tag: 'pole', n: 3 }, { id: 'lash', tag: 'binding', n: 6 }], make: (c) => c.give('pack_frame', 1) });
+  in: [{ id: 'poles', tag: 'pole', n: 3, q: { straightness: 40 } }, { id: 'lash', tag: 'binding', n: 6 }], make: (c) => c.give('pack_frame', 1) });
 R({ id: 'travois', name: 'Build a travois', group: 'Containers', time: 90,
   desc: 'Two long poles dragged behind you with a platform between. Takes both hands, but moves a deer.',
-  in: [{ id: 'poles', tag: 'pole', n: 4 }, { id: 'lash', tag: 'binding', n: 8 }], make: (c) => c.give('travois', 1) });
+  in: [{ id: 'poles', tag: 'pole', n: 4, q: { strength: 50 } }, { id: 'lash', tag: 'binding', n: 8 }], make: (c) => c.give('travois', 1) });
 R({ id: 'form_pot', name: 'Coil a clay pot', group: 'Containers', time: 45, met: 2,
   desc: 'Coil-built and smoothed. It must dry completely, under cover, before firing.',
   in: [{ id: 'clay', kind: 'clay', n: 2, q: { plasticity: 40 }, prefer: 'plasticity' }],
@@ -331,7 +348,7 @@ export const GROUPS = ['Stone', 'Tools', 'Fiber', 'Fire', 'Food', 'Hide and bone
 
 export const TAG_NAMES = {
   binding: 'binding (cordage or sinew)', cord: 'cord', cover: 'covering (grass, leaves, reeds or bark)',
-  insulation: 'loose fill (leaves, grass, reeds or feathers)', thatch: 'thatch (grass or reeds)', pole: 'poles', withy: 'withies',
+  insulation: 'loose fill (leaves, grass, reeds or feathers)', thatch: 'thatch (grass or reeds)', pole: 'poles', withy: 'withies', rib: 'ribs (sticks or poles)', straightenable: 'pole or shaft',
   cobble: 'cobbles', axehead: 'axe head (hand axe or ground head)', haft: 'haft (a shaft)', handle: 'handle (shaft, bone or antler)',
   blade: 'blade (flake or hand axe)', point: 'stone point', shaft: 'shaft', adhesive: 'pitch', leather: 'rawhide or buckskin',
   softleather: 'buckskin', fuel: 'fuel', gorge: 'gorge hook', drillspindle: 'carved spindle', tinderstuff: 'dry grass or fiber',

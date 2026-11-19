@@ -26,22 +26,25 @@
 //  * Every number marked (guess) is a judgment call, not a sourced value.
 
 import { KINDS } from './data/items.js';
-import { RESOURCES } from './data/resources.js';
+import { RESOURCES, PLACE_HA, encounter } from './data/resources.js';
 import { RECIPES, CAP_NAMES } from './data/recipes.js';
 import { capOf, contSpec, reach, here } from './items.js';
 import { travelInfo, planInput } from './actions.js';
 import { typical, sample, yieldsOf, outputsOf, kindsFor, unitsOf, makePlanner } from './plan.js';
-import { WEATHER } from './sim.js';
+import { WEATHER, SLEEP_RECOVERY } from './sim.js';
 import { pieceSpread, piecesIn, bestOf } from './tiers.js';
 import { clamp, fmt } from './util.js';
 
 export const NEEDS = ['sleep', 'food', 'water', 'fire', 'repairs'];
-export const SICK_HOURS = 10;   // hours lost to one bout of gut sickness (guess)
-const HARM_HOURS = 1;           // hours charged per point of health lost to cold (guess)
-const MET_AWAKE = 2.2;          // average metabolic rate while awake (1 = lying still)
-const TIRE = 3.2;               // fatigue gained per waking hour at that pace
+// Judgment calls, gathered here so the calibration report can vary them.
+export const TUNE = {
+  SICK_HOURS: 10,  // hours lost to one bout of gut sickness (guess)
+  HARM_HOURS: 1,   // hours charged per point of health lost to cold (guess)
+  MET_AWAKE: 2.2,  // average metabolic rate while awake (1 = lying still)
+  TIRE: 3.2,       // fatigue gained per waking hour at that pace
+  COMMUTE: 1,      // hours a day to reach country you have not stripped (guess: ~2 km out and back)
+};
 const FEED = 0.05 / 12;         // hours of feeding the fire per kg of wood
-const COMMUTE = 1;              // hours a day to reach country you have not stripped (guess: ~2 km out and back)
 const TRANCHES = [{ x: 0.85, f: 0.5, sus: true }, { x: 0.6, f: 0.5, sus: true }, { x: 0.85, f: Infinity, sus: false }];
 
 // ------------------------------------------------------------------ climate (long-run weather)
@@ -87,12 +90,13 @@ function bagLevel(kit, kind) {
   return v;
 }
 
-// Units per hour of collecting, at abundance fraction x.
-function gatherRate(kit, rid, x) {
-  const g = RESOURCES[rid].gather;
-  if (!g || (g.tool && kit.lvl(g.tool.cap) < g.tool.min)) return 0;
-  const boost = g.boost ? 1 + (g.boost.cap === 'bag' ? bagLevel(kit, g.kind) : kit.lvl(g.boost.cap)) / g.boost.per : 1;
-  return g.rate * Math.sqrt(x) * boost;
+// Units per hour of collecting from place resource r, at abundance fraction
+// x: search plus handling (see resources.js).
+function gatherRate(kit, rid, x, r) {
+  const def = RESOURCES[rid], g = def.gather;
+  if (!g || !r || (g.tool && kit.lvl(g.tool.cap) < g.tool.min)) return 0;
+  const lv = g.boost ? (g.boost.cap === 'bag' ? bagLevel(kit, g.kind) : kit.lvl(g.boost.cap)) : 0;
+  return encounter(def, (x * r.cap) / PLACE_HA, lv);
 }
 
 // Hours of replacement work per hour of using a capability: the part that
@@ -161,7 +165,7 @@ function sweep(kit, ctx) {
   for (const rid in ctx.L.res) {
     const r = ctx.L.res[rid], g = RESOURCES[rid].gather;
     if (!r.known || !g) continue;
-    const rate = gatherRate(kit, rid, 0.85);
+    const rate = gatherRate(kit, rid, 0.85, r);
     if (rate > 0) set(g.kind, 1 / rate, 'g.' + rid);
   }
   for (let pass = 0; pass < 8; pass++) {
@@ -217,7 +221,7 @@ function foodRoutes(kind, kit, ctx, bitter, depth = 0) {
   const via = (list, y, u, step) => { for (const o of list) out.push({ v: o.v * y, h: o.h * y + u.h, fire: o.fire * y + u.fire, how: step ? [step].concat(o.how) : o.how, kf: o.kf }); };
   if (k.food) {
     const f = k.food, sick = (f.risk + (bitter ? 0.5 : 0)) / f.portion;
-    out.push({ v: f.kcal * (bitter ? 0.5 : 1), h: SICK_HOURS * sick, fire: 0, how: bitter ? ['eaten bitter'] : [], kf: kind });
+    out.push({ v: f.kcal * (bitter ? 0.5 : 1), h: TUNE.SICK_HOURS * sick, fire: 0, how: bitter ? ['eaten bitter'] : [], kf: kind });
   }
   let u;
   if (k.roast && (u = unitCost('roast_' + kind, kit, ctx))) via(foodRoutes(k.roast.to, kit, ctx, bitter, depth + 1), k.roast.y, u, kind.includes('meal') ? 'baked' : 'roasted');
@@ -264,7 +268,7 @@ function foodMethods(kit, ctx, rid) {
     const k = KINDS[g.kind];
     if (k.food || k.crush || k.roast || k.butcher) {
       const wear = (g.tool ? wearPerHour(kit, g.tool.cap, P) : 0) + (g.boost && g.boost.cap !== 'bag' && kit.lvl(g.boost.cap) > 0 ? wearPerHour(kit, g.boost.cap, P) : 0);
-      out.push({ name: 'collect', kinds: [[g.kind, 1]], unitH: (x) => { const r = gatherRate(kit, rid, x); return r > 0 ? (1 + wear) / r : Infinity; } });
+      out.push({ name: 'collect', kinds: [[g.kind, 1]], unitH: (x) => { const rt = gatherRate(kit, rid, x, ctx.L.res[rid]); return rt > 0 ? (1 + wear) / rt : Infinity; } });
     }
   }
   const has = (kind) => kit.has((it) => it.kind === kind);
@@ -333,7 +337,7 @@ function fillFood(offers, E, c) {
     if (left <= 1e-6) break;
     const take = Math.min(left, o.n);
     left -= take; hours += take * o.lab; fire += take * o.fire;
-    if (!o.sus) { if (!short) hours += COMMUTE; short += take; }
+    if (!o.sus) { if (!short) hours += TUNE.COMMUTE; short += take; }
     const prev = mix.find((m) => m.rid === o.rid && m.method === o.method && m.sus === o.sus);
     if (prev) { prev.kcal += take; prev.hours += take * o.lab; } else mix.push({ rid: o.rid, method: o.method, how: o.how, kcal: take, hours: take * o.lab, sus: o.sus });
   }
@@ -363,9 +367,9 @@ function fuelOffers(kit, ctx) {
     const r = ctx.L.res[rid];
     if (!r || !r.known) continue;
     const kind = RESOURCES[rid].gather.kind, k = KINDS[kind], fh = k.mass * k.fuel * (0.5 + (r.q.dryness ?? 60) / 200);
-    const haul = COMMUTE / carryUnits(kit, kind);
+    const haul = TUNE.COMMUTE / carryUnits(kit, kind);
     for (const t of tranches(r, RESOURCES[rid])) {
-      const rate = gatherRate(kit, rid, t.x);
+      const rate = gatherRate(kit, rid, t.x, r);
       if (rate > 0) out.push({ rid, n: t.n * fh, hp: (1 / rate + FEED + (t.sus ? 0 : haul)) / fh, sus: t.sus });
     }
   }
@@ -427,10 +431,10 @@ function night(s, kit, fire, hours) {
   return { q: Math.max(0.05, q), cold: Math.round(cold), harm, woke };
 }
 // Hours of sleep a day: waking hours build fatigue at TIRE per hour, and
-// sleep clears 12 x quality per hour, so S = 24 TIRE / (12 q + TIRE).
+// sleep clears SLEEP_RECOVERY x quality per hour, so S = 24 TIRE / (R q + TIRE).
 function sleepNeed(s, kit, fire) {
   let S = 8, r;
-  for (let i = 0; i < 3; i++) { r = night(s, kit, fire, S); S = clamp((24 * TIRE) / (12 * r.q + TIRE), 4, 14); }
+  for (let i = 0; i < 3; i++) { r = night(s, kit, fire, S); S = clamp((24 * TUNE.TIRE) / (SLEEP_RECOVERY * r.q + TUNE.TIRE), 4, 16); }
   return Object.assign(r, { S });
 }
 
@@ -441,7 +445,7 @@ function waterNeed(s, kit, ctx, W) {
   if (r && r.known) {
     const pur = Math.max(r.q.purity, kit.lvl('well'));
     const sick = (W / 1.5) * Math.pow((100 - pur) / 100, 2) * 0.25;
-    opts.push({ h: drink + sick * SICK_HOURS, fire: 0, how: `drunk as it is, purity ${Math.round(pur)}${kit.lvl('well') > r.q.purity ? ' (well)' : ''}` });
+    opts.push({ h: drink + sick * TUNE.SICK_HOURS, fire: 0, how: `drunk as it is, purity ${Math.round(pur)}${kit.lvl('well') > r.q.purity ? ' (well)' : ''}` });
     if (ctx.boil) {
       const V = Math.max(0.5, kit.lvl('vessel'));
       opts.push({ h: drink + W * (25 / 60 / V), fire: (W * (20 / 60)) / V, how: `boiled ${fmt(V)} L at a time` });
@@ -505,8 +509,8 @@ export function upkeep(s, extraKinds = [], baseItems = null) {
   for (const nightFire of ctx.fire ? [false, true] : [false]) {
     const sl = sleepNeed(s, kit, nightFire);
     const awake = 24 - sl.S;
-    ctx.E = 70 * (0.95 * sl.S + MET_AWAKE * awake + 0.4 * sl.cold);
-    const W = 0.1 * sl.S + (0.1 + 0.12 * (MET_AWAKE - 1)) * awake;
+    ctx.E = 70 * (0.95 * sl.S + TUNE.MET_AWAKE * awake + 0.4 * sl.cold);
+    const W = 0.1 * sl.S + (0.1 + 0.12 * (TUNE.MET_AWAKE - 1)) * awake;
     ctx.c = nightFire ? 0 : ctx.fireHour;
     ctx.uc = {}; ctx.fr = {};
     const food = foodSupply(kit, ctx, ctx.E);
@@ -515,7 +519,7 @@ export function upkeep(s, extraKinds = [], baseItems = null) {
     if (mode === 'keep' && ctx.fire) F = 24; // nothing to relight it with: never let it die
     const f = F > 0 ? fuelFor(fuel, F * burn) : { hours: 0, short: 0 };
     const fireH = F > 0 ? f.hours + lightH * (mode === 'light' ? 1 : 0) : 0;
-    const parts = { sleep: sl.S + HARM_HOURS * sl.harm, food: food.hours, water: water.h, fire: fireH, repairs: rep.h };
+    const parts = { sleep: sl.S + TUNE.HARM_HOURS * sl.harm, food: food.hours, water: water.h, fire: fireH, repairs: rep.h };
     const U = NEEDS.reduce((a, k) => a + parts[k], 0);
     if (!best || U < best.U) best = { U, parts, nightFire, sleep: sl, E: ctx.E, W, food, water, fire: { F, mode, burn, short: f.short, light: lightH }, repairs: rep, price: sw.price };
   }

@@ -12,12 +12,12 @@
 
 import { clamp, rand, randn, fmt, fmtTime, stream } from './util.js';
 import { KINDS, UNIT } from './data/items.js';
-import { RESOURCES } from './data/resources.js';
+import { RESOURCES, PLACE_HA, encounter } from './data/resources.js';
 import { RECIPES, TAG_NAMES, CAP_NAMES } from './data/recipes.js';
 import { genLocation, findStart, prospect, dist, bearing } from './world.js';
-import { pieceSpread, piecesIn, tierKey, tierRank, tiersOf } from './tiers.js';
+import { pieceSpread, piecesIn, pieceSize, tierKey, tierRank, tiersOf } from './tiers.js';
 import { kindOf, mk, itemName, label, massOf, contSpec, whyNotHold, roomFor, capOf, addTo, split, reach, find, removeFrom, canMerge,
-  best, here, handsFor, handsUsed, carriedMass, wornIn, missingSlots, trashHere, tierLabel } from './items.js';
+  best, here, handsFor, handsUsed, carriedMass, wornIn, missingSlots, trashHere, tierLabel, pieceKind, piecesOf, setPieces, pieceScore, bestPieceFor, ids } from './items.js';
 import { say, advance, isDark, raining, condSev, footwear, impairment } from './sim.js';
 
 export const MAX_CARRY = 35; // kg felt
@@ -36,13 +36,33 @@ export function newGame(seed) {
   const s = {
     v: 1, seed, rng: stream('play|' + seed), t: 8 * 60, nextId: 1, nextLoc: 1, at: null, locs: {},
     c: { stomach: 300, glyc: 1500, fat: 60000, thirst: 0.3, fatigue: 10, chill: 0, health: 100, cond: [], hands: [], worn: [] },
-    weather: { kind: 'clear', dT: 1, until: 8 * 60 + 300 }, log: [], seen: {}, goals: {}, dead: null,
+    weather: { kind: 'clear', dT: 1, until: 8 * 60 + 300 }, log: [], seen: {}, goals: {}, dead: null, rv: 2,
   };
   const start = addLocation(s, findStart(seed), ['water', 'deadwood']);
   s.at = start.id; s.home = start.id;
   say(s, 'You come to yourself standing in open country: no clothes, no tools, nothing in your hands.');
   say(s, 'You know, with a certainty you cannot explain, how everything is made. You do not know what is over the next rise.');
   say(s, `This place: ${start.name.toLowerCase()}. It is morning.`);
+  return s;
+}
+
+// Saves from before resources were restated as densities (rv 2): the world
+// is a pure function of the seed, so regenerate each known place's amounts
+// and keep how depleted each resource was. New resources (sticks) appear,
+// and new deposit qualities (pole strength) are filled in.
+export function migrate(s) {
+  if (s.rv >= 2) return s;
+  for (const id in s.locs) {
+    const loc = s.locs[id], fresh = genLocation(s.seed, loc.x, loc.y);
+    for (const rid in fresh.res) {
+      const r = loc.res[rid], f = fresh.res[rid];
+      if (!r) { loc.res[rid] = Object.assign(f, { known: RESOURCES[rid].vis >= 1 || loc.surveys >= 3 }); continue; }
+      const frac = isFinite(r.cap) && r.cap > 0 ? clamp(r.amt / r.cap, 0, 1) : 1;
+      r.cap = f.cap; r.amt = isFinite(f.cap) ? f.cap * frac : f.amt;
+      for (const q in f.q) if (r.q[q] == null) r.q[q] = f.q[q];
+    }
+  }
+  s.rv = 2;
   return s;
 }
 
@@ -74,11 +94,14 @@ function slowdown(s, outdoor) {
   return m * impairment(s).slow;
 }
 
-function give(s, kind, n, q = {}, extra = null) {
+function give(s, kind, n, q = {}, extra = null, pieces = null) {
   const k = KINDS[kind];
   if (k.unit === 'ea') n = Math.floor(n + rand(s.rng) * 0.999 * (n % 1 ? 1 : 0)); else n = Math.round(n * 1000) / 1000;
+  if (pieces) n = pieces.length;
   if (n <= 0) return null;
-  const it = mk(s, kind, n, q);
+  const it = mk(s, kind, n, pieces ? pieces[0] : q);
+  if (pieces && pieces.length > 1) setPieces(it, pieces.map((p) => Object.assign({}, k.q, p)));
+  else if (pieces) it.q = Object.assign({}, k.q, pieces[0]);
   if (extra) Object.assign(it, extra);
   const placed = addTo(loc(s).items, it);
   if (s._made && !s._made.includes(placed)) s._made.push(placed);
@@ -109,6 +132,15 @@ export function capInfo(s, cap) {
   return best(s, cap);
 }
 
+// A stack whose pieces have drifted into different tiers splits up.
+function retier(s, it) {
+  if (!it.ps || new Set(it.ps.map((p) => tierKey({ kind: it.kind, q: p }))).size < 2) return;
+  const f = find(s, it.id);
+  if (!f) return;
+  removeFrom(f.list, it);
+  addTo(f.list, it);
+}
+
 function wearTool(s, cap, hours) {
   const tool = best(s, cap).it;
   if (!tool) return;
@@ -117,12 +149,15 @@ function wearTool(s, cap, hours) {
   for (const slot in spec || {}) {
     const target = slot === '_' ? tool : tool.parts && tool.parts[slot];
     if (!target) continue;
+    // of a stack, only the piece in use wears
+    const pi = slot === '_' ? bestPieceFor(tool, cap) : -1, q0 = pi >= 0 ? target.ps[pi] : target.q;
     for (const q in spec[slot]) {
-      if (target.q[q] == null) continue;
+      if (q0[q] == null) continue;
       // mostly gradual, occasionally a bad stroke: this is how hafts shatter
       const amt = spec[slot][q] * hours * (0.5 + rand(s.rng)) * (rand(s.rng) < 0.03 ? 6 : 1);
-      target.q[q] = Math.max(0, Math.round((target.q[q] - amt) * 10) / 10);
+      q0[q] = Math.max(0, Math.round((q0[q] - amt) * 10) / 10);
     }
+    if (pi >= 0) { setPieces(target, target.ps); retier(s, target); }
   }
   if (tool.kind === 'flake' && (cap === 'cut' || cap === 'scrape') && rand(s.rng) < 0.04 * hours) addCond(s, 'cut', 5 + Math.round(15 * rand(s.rng)));
 }
@@ -139,60 +174,91 @@ export function gatherStatus(s, rid) {
     ok = ok && good;
     lines.push({ ok: good, text: `${CAP_NAMES[g.tool.cap]} ${g.tool.min}+ ${b.it ? `(${itemName(b.it)}: ${Math.round(b.level)})` : '(none)'}` });
   }
-  let boost = 1;
+  let level = 0;
   if (g.boost) {
     const b = g.boost.cap === 'bag' ? bagFor(s, g.kind) : best(s, g.boost.cap);
-    boost = 1 + b.level / g.boost.per;
-    lines.push({ ok: b.level > 0, opt: true, text: `faster with a ${CAP_NAMES[g.boost.cap]} ${b.it ? `(${itemName(b.it)}: ×${fmt(boost)})` : ''}` });
+    level = b.level;
+    lines.push({ ok: b.level > 0, opt: true, text: `faster handling with a ${CAP_NAMES[g.boost.cap]} ${b.it ? `(${itemName(b.it)}: ×${fmt(1 + b.level / g.boost.per)})` : ''}` });
   }
-  const avail = Math.sqrt(clamp(r.amt / r.cap, 0, 1)); // the last of anything is slow to find
-  const rate = g.rate * avail * boost / slowdown(s, true);
+  // search plus handling: the thinner a resource gets, the longer the search
+  const rate = encounter(def, r.amt / PLACE_HA, level) / slowdown(s, true);
+  const boost = g.boost ? 1 + level / g.boost.per : 1;
   if (r.amt < (KINDS[g.kind].unit === 'ea' ? 1 : 0.05)) { ok = false; lines.push({ ok: false, text: 'none left for now' }); }
-  return { ok, lines, rate, boost, def, r };
+  return { ok, lines, rate, boost, level, def, r };
 }
 
+// A requirement on what you collect: {cap, min} (good enough for a hammer)
+// or {q: {quality: min}} (straight enough for a spear shaft).
+export function reqTest(req) {
+  if (!req) return null;
+  if (req.cap) return (it) => capOf(it, req.cap) >= req.min;
+  return (it) => Object.keys(req.q).every((k) => (it.q[k] ?? 0) >= req.q[k]);
+}
+export const reqText = (req) => (!req ? '' : req.cap ? `a ${CAP_NAMES[req.cap] || req.cap} (${req.min}+)` : Object.keys(req.q).map((k) => `${k} ${req.q[k]}+`).join(', '));
+
+// Collecting, piece by piece: search until you come on a candidate (random,
+// at the encounter rate), look it over, and if it will do, take it (the
+// handling time). With requirements, pieces that will not do are left.
+//   cmd: {rid, wants: [{n: units, req}], min: or else this long}
+//   (the strictest wants are filled first: the ridge pole before the uprights)
 function doGather(s, cmd) {
   const st = gatherStatus(s, cmd.rid);
   if (!st || !st.r.known) return { ok: false, msg: 'Nothing like that here.' };
   if (!st.ok) return { ok: false, msg: 'You cannot gather that right now.' };
-  const g = st.def.gather, r = st.r, minutes = cmd.min || 30, hours = minutes / 60;
+  const def = st.def, g = def.gather, r = st.r, kind = KINDS[g.kind], f = def.find;
+  const u = pieceSize(g.kind);
+  const wants = (cmd.wants || [{ n: cmd.n || (cmd.min ? (st.rate * cmd.min) / 60 : 2 * kind.hand), req: cmd.req }])
+    .map((w) => ({ n: kind.unit === 'ea' ? Math.max(1, Math.round(w.n)) : w.n, req: w.req, test: reqTest(w.req), got: 0 }))
+    .sort((a, b) => (b.req ? 1 : 0) - (a.req ? 1 : 0));
+  let want = Math.min(wants.reduce((a2, w) => a2 + w.n, 0), r.amt);
+  const test = wants.every((w) => w.test) ? true : null; // only take pieces some want accepts
+  const open = () => wants.filter((w) => w.got < w.n - 1e-9);
+  const D = r.amt / PLACE_HA, a = (f.speed * f.sweep) / 10, h = f.handle / 60 / st.boost;
+  const spread = pieceSpread(cmd.rid, here(s).env), wet = raining(s), maxH = 4;
+  let t = 0, seen = 0;
+  const got = [];
+  while (open().length && got.length * u < want - 1e-9 && t < maxH && seen < 20000) {
+    t += (u / (a * D)) * -Math.log(1 - rand(s.rng) * 0.999999); // searching for the next candidate
+    seen++;
+    const q = {};
+    for (const key in r.q) q[key] = clamp(r.q[key] + (spread[key] ?? 5) * randn(s.rng), 0, 100);
+    if (q.dryness != null && wet) q.dryness = Math.max(0, q.dryness - 35);
+    const piece = { id: 0, kind: g.kind, n: 1, q: Object.assign({}, kind.q, q) };
+    const w = open().find((x) => !x.test || x.test(piece));
+    if (!w) continue; // nothing still wanted will take this one
+    t += u * h; // taking it
+    w.got += u;
+    got.push(q);
+  }
+  const minutes = Math.max(2, t * 60 * slowdown(s, true)), hours = minutes / 60;
   if (g.tool) wearTool(s, g.tool.cap, hours);
   if (g.boost && best(s, g.boost.cap).level > 0) wearTool(s, g.boost.cap, hours);
   advance(s, minutes, g.met || 3, 'act');
   rollRisks(s, g.risk || [{ type: 'cut', p: 0.01, sev: [3, 12] }], hours * (isDark(s) ? 3 : 1));
-  const kind = KINDS[g.kind];
-  let n = Math.min(r.amt, st.rate * hours * (0.8 + 0.4 * rand(s.rng)));
-  if (kind.unit === 'ea') n = Math.floor(n + rand(s.rng)); else n = Math.round(n * 100) / 100;
-  r.amt -= n;
   r.assessed = true;
-  if (n <= 0) { say(s, `You search but find no ${kind.name} worth taking.`); return { ok: true }; }
-  // Pieces vary around the deposit's mean. Draw them one by one (handful by
-  // handful for loose stuff), sort them into tiers, and give each tier its
-  // own stack: the best of the trip is kept apart from the rest.
-  const spread = pieceSpread(cmd.rid, here(s).env), wet = raining(s);
-  const m = piecesIn(g.kind, n), groups = {};
-  for (let i = 0; i < m; i++) {
-    const q = {};
-    for (const key in r.q) q[key] = r.q[key] + (spread[key] ?? 5) * randn(s.rng);
-    if (q.dryness != null && wet) q.dryness -= 35;
-    const piece = { kind: g.kind, q: Object.fromEntries(Object.entries(q).map(([k2, v]) => [k2, clamp(v, 0, 100)])) };
-    const key = tierKey(piece);
-    const gr = (groups[key] = groups[key] || { n: 0, q: {}, rank: 0 });
-    gr.n++;
-    for (const k2 in piece.q) gr.q[k2] = (gr.q[k2] || 0) + piece.q[k2];
-    gr.rank = key.split(',').reduce((a, x) => a + Number(x || 0), 0);
+  const n = kind.unit === 'ea' ? got.length : Math.round(got.length * u * 100) / 100;
+  r.amt = Math.max(0, r.amt - n);
+  const strict = wants.filter((w) => w.req);
+  if (!got.length) { say(s, `You spend ${fmtTime(minutes)} and find no ${kind.name}${strict.length ? ` good enough for ${reqText(strict[0].req)}` : ' worth taking'}.`); return { ok: true }; }
+  // countable things keep each piece; loose stuff averages within a tier
+  let placed;
+  if (pieceKind(g.kind)) placed = give(s, g.kind, 0, {}, null, got);
+  else {
+    const groups = {};
+    for (const q of got) { const key = tierKey({ kind: g.kind, q }); (groups[key] = groups[key] || []).push(q); }
+    const list = Object.values(groups).sort((x, y) => pieceScore(g.kind, y[0]) - pieceScore(g.kind, x[0]));
+    for (const grp of list) {
+      const q = {};
+      for (const key in grp[0]) q[key] = grp.reduce((acc, p) => acc + p[key], 0) / grp.length;
+      const it = give(s, g.kind, Math.round(grp.length * u * 100) / 100, q);
+      if (!placed) placed = it;
+    }
   }
-  const list = Object.values(groups).sort((a, b) => b.rank - a.rank);
-  const per = n / m;
-  const placed = [];
-  for (const gr of list) {
-    for (const k2 in gr.q) gr.q[k2] /= gr.n;
-    placed.push(give(s, g.kind, kind.unit === 'ea' ? gr.n : Math.round(gr.n * per * 100) / 100, gr.q));
-  }
-  if (s._made) s._made = placed.filter(Boolean).slice(0, 1); // only the best of the trip goes to hand
-  const top = list.length > 1 ? (() => { const it = { kind: g.kind, n: 1, q: Object.assign({}, kind.q, list[0].q) }; return tierLabel(it); })() : '';
-  const said = `You gather ${kind.unit === 'ea' ? n + ' × ' : fmt(n) + UNIT[kind.unit] + ' of '}${kind.name}${top ? `; the best ${kind.unit === 'ea' && list[0].n === 1 ? 'is' : 'are'} good for ${top}` : ''}.`;
-  say(s, said);
+  if (s._made) s._made = placed ? [placed] : []; // only the best of the trip goes to hand
+  const top = placed ? tierLabel(placed) : '';
+  const short = got.length * u < want - 1e-9 ? ` (you wanted ${kind.unit === 'ea' ? want : fmt(want) + UNIT[kind.unit]})` : '';
+  const goodFor = strict.length ? `, ${strict.map((w) => `${kind.unit === 'ea' ? Math.round(w.got) : fmt(w.got) + UNIT[kind.unit]} good enough for ${reqText(w.req)}`).join(', ')}` : '';
+  say(s, `You gather ${kind.unit === 'ea' ? n + ' × ' : fmt(n) + UNIT[kind.unit] + ' of '}${kind.name}${goodFor} in ${fmtTime(minutes)}${short}${!strict.length && top ? `; the best ${kind.unit === 'ea' && placed.n === 1 ? 'is' : 'are'} good for ${top}` : ''}.`);
   return { ok: true, done: 'g.' + cmd.rid };
 }
 
@@ -225,21 +291,27 @@ const metric = (it, spec) => {
 // Decide which stacks would supply an input. Material for one input always
 // comes from a single kind (you do not thatch half in grass, half in bark),
 // but may be drawn from several stacks of it.
-export function planInput(s, spec, chosenId, scaleMax = 0) {
-  const cands = reach(s).map((r) => r.it).filter((it) => matches(it, spec));
+// `used` (id -> units) holds what other inputs of the same recipe have
+// already claimed, so two slots never count the same pile twice.
+export function planInput(s, spec, chosenId, scaleMax = 0, used = null) {
+  const left = (it) => it.n - ((used && used.get(it.id)) || 0);
+  const cands = reach(s).map((r) => r.it).filter((it) => matches(it, spec) && left(it) > 1e-9);
   const byKind = {};
   for (const it of cands) (byKind[it.kind] = byKind[it.kind] || []).push(it);
   const chosen = cands.find((it) => it.id === chosenId);
   let pickKind = null, bestScore = -1;
   for (const kind in byKind) {
-    const total = byKind[kind].reduce((a, it) => a + it.n, 0);
+    const total = byKind[kind].reduce((a, it) => a + left(it), 0);
     const enough = total + 1e-9 >= unitsNeeded(spec, kind);
-    const score = (chosen && chosen.kind === kind ? 1e6 : 0) + (enough ? 1e3 : 0) + Math.max(...byKind[kind].map((it) => metric(it, spec)));
+    // with a quality to maximise, the best kind; otherwise the plainest that will do (sticks before poles for ribs)
+    const grade = spec.prefer ? Math.max(...byKind[kind].map((it) => metric(it, spec))) : -Math.min(...byKind[kind].map((it) => pieceScore(kind, it.q))) / 1000;
+    const score = (chosen && chosen.kind === kind ? 1e6 : 0) + (enough ? 1e3 : 0) + grade;
     if (score > bestScore) { bestScore = score; pickKind = kind; }
   }
   if (!pickKind) return { ok: false, have: 0, cands };
-  const stacks = byKind[pickKind].sort((a, b) => (b === chosen) - (a === chosen) || metric(b, spec) - metric(a, spec));
-  const have = stacks.reduce((a, it) => a + it.n, 0);
+  // use up the least good stacks that will do, unless the result depends on quality
+  const stacks = byKind[pickKind].sort((a, b) => (b === chosen) - (a === chosen) || (spec.prefer ? metric(b, spec) - metric(a, spec) : pieceScore(pickKind, a.q) - pieceScore(pickKind, b.q)));
+  const have = stacks.reduce((a, it) => a + left(it), 0);
   const base = unitsNeeded(spec, pickKind);
   let k = 1;
   if (scaleMax) {
@@ -274,22 +346,27 @@ export function recipeStatus(s, r, choose = {}) {
     if (!good) ok = false;
     lines.push({ ok: good, res: r.res, text: `${RESOURCES[r.res].name.toLowerCase()} at this place` });
   }
-  for (const spec of r.in) {
-    let max = 0;
-    if (r.scale === spec.id) max = spec.max * (spec.maxWith && capInfo(s, spec.maxWith.cap).level > 0 ? spec.maxWith.mult : 1);
-    const p = planInput(s, spec, choose[spec.id], max);
+  const used = new Map(), inLines = {};
+  for (const spec of inputOrder(r)) {
+    const max = scaleMaxOf(s, r, spec);
+    const p = planInput(s, spec, choose[spec.id], max, used);
     plans[spec.id] = p;
     if (r.scale === spec.id && p.ok) k = p.k;
     if (!p.ok && !spec.opt) ok = false;
-    lines.push({ ok: p.ok, opt: !!spec.opt, input: spec.id, plan: p,
-      text: `${spec.opt ? 'optional: ' : ''}${describeInput(spec, p)}${p.ok ? '' : p.have ? ` (have ${fmt(p.have)})` : ''}` });
+    if (p.ok) { // claim what this input will take
+      let need = p.base * (r.scale === spec.id ? p.k : 1);
+      for (const it of p.stacks) { if (need <= 1e-9) break; const take = Math.min(it.n - (used.get(it.id) || 0), need); used.set(it.id, (used.get(it.id) || 0) + take); need -= take; }
+    }
+    inLines[spec.id] = { ok: p.ok, opt: !!spec.opt, input: spec.id, plan: p,
+      text: `${spec.opt ? 'optional: ' : ''}${describeInput(spec, p)}${p.ok ? '' : p.have ? ` (have ${fmt(p.have)})` : ''}` };
   }
+  for (const spec of r.in) lines.push(inLines[spec.id]);
   if (r.check) {
     const why = r.check(s, { hasKind: (kind) => hasKind(s, kind) });
     if (why) { ok = false; lines.push({ ok: false, text: why }); }
   }
   const time = r.time * (r.flat ? 1 : k) * slowdown(s, r.outdoor);
-  return { ok, lines, plans, k, time };
+  return { ok, lines, plans, k, time, choose };
 }
 
 // A recipe is worth showing once the player holds about half of what it needs.
@@ -304,10 +381,17 @@ export function recipeVisible(s, r, st) {
 }
 
 // ------------------------------------------------------------------ doing recipes
+// Inputs with quality requirements are settled first, so a plain slot
+// (ribs) cannot use up the one pole good enough for the ridge.
+const inputOrder = (r) => r.in.slice().sort((a, b) => (b.q ? 1 : 0) - (a.q ? 1 : 0));
+const scaleMaxOf = (s, r, spec) => (r.scale === spec.id ? spec.max * (spec.maxWith && capInfo(s, spec.maxWith.cap).level > 0 ? spec.maxWith.mult : 1) : 0);
+
 function takeInputs(s, r, st) {
   const ins = {};
-  for (const spec of r.in) {
-    const p = st.plans[spec.id];
+  for (const spec of inputOrder(r)) {
+    if (!st.plans[spec.id].ok) continue;
+    // plan again on the state as it now is: earlier inputs have taken their share
+    const p = planInput(s, spec, (st.choose || {})[spec.id], scaleMaxOf(s, r, spec));
     if (!p.ok) continue;
     let need = p.base * (r.scale === spec.id ? st.k : 1);
     let merged = null;
@@ -317,14 +401,16 @@ function takeInputs(s, r, st) {
       need -= n;
       let piece;
       if (n >= stack.n - 1e-9) { piece = stack; removeFrom(find(s, stack.id).list, stack); }
-      else { piece = split(s, stack, n); if (s._partial && s.c.hands.includes(stack)) s._partial.push(stack); }
+      else { piece = split(s, stack, n, spec.prefer ? 'best' : 'worst'); if (s._partial && s.c.hands.includes(stack)) s._partial.push(stack); }
       if (!merged) merged = piece;
+      else if (pieceKind(merged.kind)) setPieces(merged, piecesOf(merged).concat(piecesOf(piece)));
       else {
         const tot = merged.n + piece.n;
         for (const key in merged.q) merged.q[key] = (merged.q[key] * merged.n + (piece.q[key] ?? 0) * piece.n) / tot;
         merged.n = tot;
       }
     }
+    if (merged && merged.ps && merged.ps.length === 1) { merged.q = merged.ps[0]; delete merged.ps; }
     ins[spec.id] = merged;
   }
   return ins;
@@ -353,8 +439,7 @@ function makeCtx(s, r, ins, k) {
       if (b.stones) {
         const f = reach(s).filter((x) => x.it.kind === 'cobble').sort((a, c) => a.it.q.thermal - c.it.q.thermal)[0];
         if (f && rand(s.rng) < (100 - f.it.q.thermal) / 250) {
-          f.it.n -= 1;
-          if (f.it.n <= 0) removeFrom(f.list, f.it);
+          if (f.it.n <= 1) removeFrom(f.list, f.it); else split(s, f.it, 1, 'worst');
           say(s, 'A cooking stone cracks apart in the heat.', 'warn');
         }
       }
@@ -437,7 +522,7 @@ function doReplace(s, cmd) {
   const it = f.it, spec = slotSpec(it, cmd.slot);
   const plan = planInput(s, spec, cmd.with);
   if (!plan.ok) return { ok: false, msg: `You need ${describeInput(spec, plan)}.` };
-  const ins = takeInputs(s, { in: [spec] }, { plans: { [cmd.slot]: plan }, k: 1 });
+  const ins = takeInputs(s, { in: [spec] }, { plans: { [cmd.slot]: plan }, k: 1, choose: { [cmd.slot]: cmd.with } });
   it.parts = it.parts || {};
   const old = it.parts[cmd.slot];
   it.parts[cmd.slot] = ins[cmd.slot];
@@ -548,7 +633,7 @@ function doRest(s, cmd) {
 function doSleep(s, forced = 0) {
   const t0 = s.t;
   let why = '';
-  for (let i = 0; i < 20 && !s.dead; i++) {
+  for (let i = 0; i < 30 && !s.dead; i++) {
     advance(s, 30, 0.95, 'sleep');
     if (forced ? s.t - t0 >= forced : s.c.fatigue <= 3 && s.t - t0 >= 60) break;
     if (s.c.chill > 85) { why = ' The cold wakes you, shivering hard.'; break; }
@@ -802,7 +887,7 @@ export function act(s, cmd) {
   if (!h) return { ok: false, msg: 'Unknown action.' };
   if (STRENUOUS[cmd.t] && s.c.fatigue >= 92 && !(cmd.t === 'recipe' && RECIPES[cmd.id] && RECIPES[cmd.id].met <= 2))
     return { ok: false, msg: 'You are too exhausted for that. Rest or sleep.' };
-  s._made = []; s._used = []; s._partial = [];
+  s._made = []; s._used = []; s._partial = []; ids.s = s;
   const res = h(s, cmd);
   if (res.ok) settleHands(s);
   delete s._made; delete s._used; delete s._partial;

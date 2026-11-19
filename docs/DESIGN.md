@@ -139,24 +139,87 @@ by those tests rather than tracked as continuous distributions.
   hammer of 35, and a cobble's hammer is 0.9 × hardness, so hardness 38.9.
   Upper limits ("can still be resharpened") and freshness 25 (safe to eat)
   are lines too. A tier is the interval between two lines.
-- **Merging.** Like items merge unless a line falls between them. An
-  interval is closed under averaging, so a merged stack is never worse for
-  any recipe than its parts; qualities no rule tests just average. A good
-  hammer therefore keeps its identity until good hammers are common enough
-  to stack.
-- **Collecting.** Pieces scatter around their deposit's mean by 70% of the
-  scatter between deposits (a guess). A trip draws them one by one (loose
-  material by the half handful, lumps by the half kilogram, at most 12
-  draws), sorts them into tiers, and gives each tier its own stack, so the
-  best of the trip stands apart. The journal says what the best is good
-  for. Stash pills and hands show the highest line a piece clears.
-- **Planning.** Expected time to a passing piece = pieces needed ÷ (pieces
-  an hour × fraction that pass). The fraction comes from 200 fixed normal
-  draws per deposit, so it is deterministic. The planner compares here,
-  every known place (plus the walk) and searching (an unknown deposit:
-  typical mean, the two scatters combined). The upkeep evaluator values a
-  collected tool as the typical best of one half-hour trip (the expected
-  largest of that many normal draws).
+- **Pieces.** Countable things (cobbles, poles, sticks, flakes) keep every
+  piece's own qualities (`it.ps`); the stack's `q` is their mean, for
+  display. Pieces are only stacked within a tier, so the mean is on the
+  same side of every tested line as each piece and requirement checks on
+  the stack are exact. Loose material (kg of grass, metres of cord) still
+  averages within a tier. Something built keeps the pieces it was built
+  from: take a structure apart and the one good pole in its frame comes
+  back as itself. Pieces age and wear one by one (only the piece in use
+  wears), and a stack whose pieces drift across a line splits. A good
+  hammer therefore keeps its identity until good hammers are common.
+- **Using things up.** A recipe takes the least good pieces that will do,
+  unless its result depends on a quality (`prefer`, such as a knapping
+  core), and settles inputs with quality requirements first, so the ribs
+  of a hut cannot use up the one pole strong enough for its ridge. Two
+  inputs of one recipe never count the same stack twice.
+- **Labels.** Stash pills and hands show the highest line a piece clears
+  ("pole strength 50+").
+
+## Collecting (src/data/resources.js)
+
+Collecting follows Holling's disc equation:
+
+    units per hour = a·D·p / (1 + a·D·p·h)
+
+with a = speed × sweep width (hectares searched per hour), D = units per
+hectare at this place now (amount ÷ 20 ha), p = fraction good enough for
+the job, h = handling time per unit (divided by 1 + level/per with a
+helping tool). Scarce things are slow because you search; common things
+because you handle them; and a stricter requirement costs only search
+time, because pieces that will not do are looked at and left. Each
+resource states density, sweep, speed, handling time and the fraction of a
+full stock that regrows in a year; a place's full amount, its logistic
+regrowth rate and the rate at full abundance are derived from them.
+
+A collecting action draws candidates one at a time (random search time at
+the encounter rate, then a quality draw around the deposit's mean, with
+pieces scattering by 70% of the scatter between deposits, a guess), keeps
+the ones some outstanding want accepts, and charges handling for each. It
+collects to a target ("3 poles, 1 of them strength 50+": the strictest want
+is filled first) rather than for a fixed half hour; with no target, both
+hands' worth. Only the best of a trip goes to hand, never displacing a
+better piece of the same kind.
+
+The planner prices a collecting step as the expected time to the pieces it
+needs: pieces ÷ (encounter rate with p), comparing here, every known place
+(plus the walk) and searching. Pass fractions come from 200 fixed normal
+draws per deposit, so they are deterministic. The upkeep evaluator values
+a collected tool as the typical best of one half-hour trip.
+
+Saves from before this model are migrated on load: the world is a pure
+function of the seed, so each known place's amounts are regenerated and
+each resource keeps how depleted it was. Qualities added later (pole
+strength) are drawn from a separate random stream, so existing places do
+not change.
+
+## Structures by role, and touching up
+
+Slots say what each part does: a debris hut is a ridge pole (strength
+50+), two uprights (any poles), 25 ribs (sticks or poles) and the cover; a
+lean-to has a ridge (strength 45+), uprights and rafters; a raised bed's
+frame must bear weight; a travois needs strong poles and a pack frame
+straight ones. The frame stands only while every load-bearing part is
+sound.
+
+Touch-up recipes improve one quality at the cost of another:
+
+| Recipe | Gains | Costs |
+| --- | --- | --- |
+| Resharpen an edge | sharpness +25 (up to 75) | integrity −12: stone flaked away |
+| Straighten a pole or shaft | straightness +15, or +25 over a fire (up to 90) | strength −8 (girth shaved off), hardness −3 |
+| Retwist cordage | strength +10 (up to 80), integrity back to 100 | 0.01 kg of fibre per batch, 3 min a metre |
+
+## Calibration (docs/CALIBRATION.md)
+
+`npm run calibrate` writes the report: every resource's parameters and
+what they imply (search rate, collecting rate, whether search or handling
+limits it, stock and sustainable yield per place); benchmarks (whole-task
+times at synthetic typical places, e.g. a debris hut from nothing in 2–5 h,
+a nut-cracking stone in minutes) with their basis; and the elasticity of
+upkeep to each parameter, so the numbers that matter most get sourced
+first. `npm test` fails if a benchmark leaves its range.
 
 ## Upkeep (src/econ.js)
 
@@ -192,7 +255,7 @@ between living off what regrows here and walking out each day.
 
 | Need | How its hours are found |
 | --- | --- |
-| Sleep | Fatigue builds at 3.2 an hour awake and clears at 12 × quality an hour asleep, so sleep = 24·3.2 / (12q + 3.2). Quality comes from bed, shelter and roof, and from a night simulated hour by hour (same chill rules as the game) for each kind of weather: chill past 40 spoils sleep, past 85 wakes you for good, past 70 costs health, charged at 1 h per point (a guess). |
+| Sleep | Fatigue builds at 3.2 an hour awake and clears at 8 × quality an hour asleep (`SLEEP_RECOVERY`, set so a good night is 7–8 h), so sleep = 24·3.2 / (8q + 3.2). Quality comes from bed, shelter and roof, and from a night simulated hour by hour (same chill rules as the game) for each kind of weather: chill past 40 spoils sleep, past 85 wakes you for good, past 70 costs health, charged at 1 h per point (a guess). |
 | Food | Energy at 70 kcal/h × metabolic rate (0.95 asleep, 2.2 awake). Each resource offers its food by its best route (raw, roasted, boiled, pounded, leached, dried, butchered), costing collecting, hands-on processing, and illness: each bout of gut sickness is charged 10 h (a guess). A carcass spoils faster than you can eat it unless dried or kept cool. |
 | Water | 0.1 L/h asleep and about 0.25 L/h awake; drinking as it is (illness odds from purity) or boiling, whichever costs less; a walk if there is no water here. |
 | Fire | Hours of burning a day (all night if sleeping by a fire is cheaper overall, otherwise just cooking and boiling) × wood per hour, plus lighting it once a day by friction (failed attempts wear the spindle and board). With a fire but nothing to relight it, it must burn all day. |

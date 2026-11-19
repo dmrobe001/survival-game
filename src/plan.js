@@ -18,10 +18,10 @@
 // Everything here is an estimate for display. It never changes game state.
 
 import { KINDS } from './data/items.js';
-import { RESOURCES } from './data/resources.js';
+import { RESOURCES, PLACE_HA, encounter } from './data/resources.js';
 import { RECIPES, CAP_NAMES } from './data/recipes.js';
-import { capOf, reach, here } from './items.js';
-import { capInfo, planInput, recipeStatus, gatherStatus, travelInfo } from './actions.js';
+import { capOf, reach, here, pieceKind } from './items.js';
+import { capInfo, planInput, recipeStatus, gatherStatus, travelInfo, bagFor } from './actions.js';
 import { genLocation, prospect } from './world.js';
 import { passRate, pieceSpread, searchSpread, pieceSize } from './tiers.js';
 import { stream, rand, randn, clamp } from './util.js';
@@ -214,7 +214,7 @@ export function makePlanner(s, extra = null) {
     const opts = [];
     for (const rid of T.gatherers[kind] || []) {
       const g = RESOURCES[rid].gather, w = resWhere(rid);
-      const rate = w.mode === 'here' ? Math.max(gatherStatus(s, rid).rate, 1e-3) : g.rate * 0.8;
+      const rate = Math.max(1e-3, w.mode === 'here' ? gatherStatus(s, rid).rate : w.mode === 'goto' ? encounter(RESOURCES[rid], s.locs[w.to].res[rid].amt / PLACE_HA, boostLv(rid)) : g.rate * 0.5);
       opts.push({ type: 'gather', rid, w, setup: w.m + (g.tool ? capEst(g.tool.cap, g.tool.min).m : 0), unit: 60 / rate });
     }
     for (const p of T.producers[kind] || []) {
@@ -229,7 +229,14 @@ export function makePlanner(s, extra = null) {
     if (!stack.size) optMemo[kind] = opts; // only cache results that no cycle guard truncated
     return opts;
   }
-  const cost = (o, n) => (o.type === 'gather' ? o.setup + Math.max(30, o.unit * n) : o.setup + Math.ceil(n / o.n0 - 1e-9) * o.per);
+  const cost = (o, n) => (o.type === 'gather' ? o.setup + Math.max(5, o.unit * n) : o.setup + Math.ceil(n / o.n0 - 1e-9) * o.per);
+  const round5 = (m) => Math.max(5, Math.ceil(m / 5 - 1e-9) * 5);
+  // how much a helping tool you hold speeds the handling
+  function boostLv(rid) {
+    const g = RESOURCES[rid].gather;
+    if (!g.boost) return 0;
+    return g.boost.cap === 'bag' ? bagFor(s, g.kind).level : capNow(g.boost.cap);
+  }
   function bestOpt(kind, n, made = false) {
     let o = null, m = Infinity;
     for (const x of optionsFor(kind)) { if (made && x.type === 'gather') continue; const c = cost(x, n); if (c < m) { m = c; o = x; } }
@@ -245,15 +252,18 @@ export function makePlanner(s, extra = null) {
     const mk = rid + '|' + tag + '|' + pieces;
     if (!srcMemo[mk]) {
       const g = RESOURCES[rid].gather, srcs = [];
-      if (enough(rid, L.res[rid])) srcs.push({ w: { mode: 'here', m: 0 }, r: L.res[rid], env: L.env, rate: Math.max(gatherStatus(s, rid).rate, 1e-3) });
-      for (const id in s.locs) if (id !== s.at && enough(rid, s.locs[id].res[rid])) srcs.push({ w: { mode: 'goto', to: id, m: travelInfo(s, id).minutes }, r: s.locs[id].res[rid], env: s.locs[id].env, rate: g.rate * 0.8 });
-      srcs.push({ w: Object.assign({ mode: 'search' }, odds[rid]), r: null, rate: g.rate * 0.8 });
+      const def = RESOURCES[rid];
+      if (enough(rid, L.res[rid])) srcs.push({ w: { mode: 'here', m: 0 }, r: L.res[rid], env: L.env, D: L.res[rid].amt / PLACE_HA });
+      for (const id in s.locs) if (id !== s.at && enough(rid, s.locs[id].res[rid])) srcs.push({ w: { mode: 'goto', to: id, m: travelInfo(s, id).minutes }, r: s.locs[id].res[rid], env: s.locs[id].env, D: s.locs[id].res[rid].amt / PLACE_HA });
+      srcs.push({ w: Object.assign({ mode: 'search' }, odds[rid]), r: null, D: def.find.density * 0.5 });
       let best = null, first = null;
       for (const src of srcs) {
         const p = src.r ? passRate(kind, src.r.q, pieceSpread(rid, src.env), test) : passRate(kind, {}, searchSpread(rid), test);
         if (!first) first = { p, w: src.w };
         if (p <= 0) continue;
-        const collect = Math.max(30, Math.ceil((60 * pieces) / ((src.rate / pieceSize(kind)) * p) / 30) * 30);
+        // search plus handling, where only the pieces that will do are handled
+        const rateP = encounter(def, src.D, boostLv(rid), p);
+        const collect = round5((60 * pieces * pieceSize(kind)) / Math.max(rateP, 1e-6));
         if (!best || src.w.m + collect < best.w.m + best.collect) best = { w: src.w, p, collect };
       }
       if (best) {
@@ -308,11 +318,11 @@ export function makePlanner(s, extra = null) {
     return best;
   }
   // A collecting step from a chosen deposit.
-  function collectStep(src, forKey, needCap, add) {
+  function collectStep(src, forKey, needCap, add, want) {
     const g = RESOURCES[src.rid].gather, key = whereKey(src.rid, src.w);
     if (src.why) why[key] = src.why;
     if (g.tool) needCap(g.tool.cap, g.tool.min, key);
-    add({ key, minutes: src.w.m + src.collect, wait: 0, times: 1 }, forKey);
+    add({ key, minutes: src.w.m + src.collect, wait: 0, times: 1, wants: [want] }, forKey);
     return key;
   }
 
@@ -323,7 +333,10 @@ export function makePlanner(s, extra = null) {
     let unknown = false;
     const add = (step, forKey) => {
       let e = byKey[step.key];
-      if (e) { e.minutes += step.minutes; e.times += step.times; } else { e = byKey[step.key] = Object.assign({ for: [] }, step); steps.push(e); }
+      if (e) {
+        e.minutes += step.minutes; e.times += step.times;
+        if (step.wants) e.wants = (e.wants || []).concat(step.wants); // e.g. one strong pole for the ridge, two of any for uprights
+      } else { e = byKey[step.key] = Object.assign({ for: [] }, step); steps.push(e); }
       if (forKey && forKey !== e.key && !e.for.includes(forKey)) e.for.push(forKey);
       return e.key;
     };
@@ -338,7 +351,7 @@ export function makePlanner(s, extra = null) {
       const e = capEst(cap, min);
       if (!e.kind || !isFinite(e.m)) { unknown = true; return null; }
       if (!e.src) return obtain(e.kind, 1, forKey);
-      const key = collectStep(e.src, forKey, needCap, add);
+      const key = collectStep(e.src, forKey, needCap, add, { n: 1, req: { cap, min } });
       for (const c in T.capKinds) { const hit = T.capKinds[c].find((x) => x.kind === e.kind); if (hit) planned[c] = Math.max(planned[c] || 0, c === cap ? min : hit.level); }
       return key;
     }
@@ -351,7 +364,7 @@ export function makePlanner(s, extra = null) {
         const g = RESOURCES[b.o.rid].gather;
         key = 'g.' + b.o.rid;
         if (g.tool) needCap(g.tool.cap, g.tool.min, key);
-        add({ key, minutes: b.o.w.m + Math.max(30, Math.ceil((b.o.unit * n) / 30) * 30), wait: 0, times: 1 }, forKey);
+        add({ key, minutes: b.o.w.m + round5(b.o.unit * n), wait: 0, times: 1, wants: [{ n }] }, forKey);
       } else key = recipe(b.o.rid, Math.ceil(n / b.o.n0 - 1e-9), forKey, b.o.wait, false);
       active.delete(kind);
       for (const c in T.capKinds) { const hit = T.capKinds[c].find((x) => x.kind === kind); if (hit) planned[c] = Math.max(planned[c] || 0, hit.level); }
@@ -367,7 +380,7 @@ export function makePlanner(s, extra = null) {
         if (spec.opt) continue;
         const e = inputEst(spec, spec.keep ? 1 : times);
         if (e.met) continue;
-        const k = !e.kind ? null : e.src ? collectStep(e.src, key, needCap, add) : obtain(e.kind, e.deficit, key);
+        const k = !e.kind ? null : e.src ? collectStep(e.src, key, needCap, add, { n: e.deficit, req: { q: spec.q } }) : obtain(e.kind, e.deficit, key);
         if (!k) unknown = true;
         if (top) reqs.in[spec.id] = k;
       }
@@ -380,7 +393,10 @@ export function makePlanner(s, extra = null) {
       const [rid, at] = target.slice(2).split('@'), g = RESOURCES[rid].gather;
       const w = !at ? resWhere(rid) : at === 'find' ? Object.assign({ mode: 'search' }, odds[rid]) : { mode: 'goto', to: at, m: travelInfo(s, at).minutes };
       if (g && g.tool) reqs.tool[g.tool.cap] = needCap(g.tool.cap, g.tool.min, target);
-      add({ key: target, minutes: w.m + (g ? 30 : 0), wait: 0, times: 1 }, null);
+      // collecting projects: one useful piece, or a handful of loose stuff
+      const units = g ? (pieceKind(g.kind) ? 1 : KINDS[g.kind].hand) : 0;
+      const rate = g ? Math.max(1e-3, w.mode === 'here' ? gatherStatus(s, rid).rate : g.rate * 0.5) : 1;
+      add({ key: target, minutes: w.m + (g ? round5((60 * units) / rate) : 0), wait: 0, times: 1, wants: g ? [{ n: units }] : null }, null);
     }
     return { steps, reqs, unknown };
   }

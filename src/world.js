@@ -96,8 +96,13 @@ export function genLocation(seed, x, y) {
     const fill = 0.6 + 0.4 * rand(st);
     const q = {};
     for (const k in def.q) {
+      if (def.qLate && def.qLate.includes(k)) continue;
       const spec = typeof def.q[k] === 'function' ? def.q[k](env) : def.q[k];
       q[k] = Math.round(clamp(spec[0] + spec[1] * randn(st), 3, 97));
+    }
+    if (def.qLate && def.qLate.length) {
+      const st2 = stream(`late|${seed}|${x}|${y}|${id}`);
+      for (const k of def.qLate) { const spec = typeof def.q[k] === 'function' ? def.q[k](env) : def.q[k]; q[k] = Math.round(clamp(spec[0] + spec[1] * randn(st2), 3, 97)); }
     }
     const a = clamp(def.habitat(env), 0, 1) * noise;
     if (a < 0.25) continue; // below this the place simply does not have it

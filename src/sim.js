@@ -10,7 +10,8 @@
 import { clamp, rand, pick } from './util.js';
 import { KINDS } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
-import { kindOf, capOf, contSpec, mk, here, itemName, wornIn } from './items.js';
+import { kindOf, capOf, contSpec, mk, here, itemName, wornIn, setPieces, addTo } from './items.js';
+import { tierKey } from './tiers.js';
 
 export function say(s, msg, cls = '') {
   s.log.push({ t: s.t, msg, cls });
@@ -97,6 +98,10 @@ export function sleepQuality(s) {
 //            where measurable impairment starts); harm past 4.5 L (about 6%)
 //   stamina  fatigue 0..100: tired past 60, collapse at 100
 //   warmth   chill 0..100: shivering and clumsy past 30, harm past 70
+// Fatigue cleared per hour of perfect sleep. With ~3.2 gained per waking hour
+// of steady work, 16 h awake then needs about 7 h of good sleep.
+export const SLEEP_RECOVERY = 8;
+
 export const LIMITS = { food: { ok: 800, full: 3000 }, water: { ok: 1, harm: 4.5 }, stamina: { ok: 60, harm: 100 }, warmth: { ok: 30, harm: 70 } };
 
 // Litres per hour: about 2.4 L a day at rest, several times that working hard.
@@ -133,7 +138,7 @@ function tickBody(s, h, met, mode) {
   // water
   c.thirst += h * thirstRate(met, sick);
   // fatigue
-  if (mode === 'sleep') c.fatigue -= 12 * sleepQuality(s) * h;
+  if (mode === 'sleep') c.fatigue -= SLEEP_RECOVERY * sleepQuality(s) * h;
   else if (met <= 1.3) c.fatigue -= 3 * h;
   else {
     const strain = 1 + (c.glyc <= 0 ? 0.5 : 0) + (c.thirst > LIMITS.water.ok ? 0.4 : 0) + (c.chill > 50 ? 0.3 : 0) + (sick ? 0.4 : 0);
@@ -164,17 +169,27 @@ function tickBody(s, h, met, mode) {
 
 // ---- items
 // Returns true if the item has ceased to exist (rotted, broken, burned out).
+function ageQ(Q, k, d, slow, cool, extra, wet) {
+  for (const src of [k.decay, extra]) {
+    if (!src) continue;
+    for (const q in src) if (Q[q] != null) Q[q] -= src[q] * d * slow * (q === 'fresh' && cool ? 0.4 : 1);
+  }
+  if (wet) { for (const q in k.rain || {}) if (Q[q] != null) Q[q] -= k.rain[q] * d; }
+  else for (const q in k.dries || {}) if (Q[q] != null) Q[q] = Math.min(100, Q[q] + k.dries[q] * d);
+  for (const q in Q) if (Q[q] < 0) Q[q] = 0;
+}
+const dead = (Q) => (Q.integrity != null && Q.integrity <= 0) || (Q.fresh != null && Q.fresh <= 0);
+
 function tickItem(s, it, env, h, cool, extra) {
   const k = kindOf(it);
   const d = h / 24;
   const slow = k.smokedSlows && it.q.smoked > 50 ? k.smokedSlows : 1;
-  for (const src of [k.decay, extra]) {
-    if (!src) continue;
-    for (const q in src) if (it.q[q] != null) it.q[q] -= src[q] * d * slow * (q === 'fresh' && cool ? 0.4 : 1);
-  }
-  if (env.wet) { for (const q in k.rain || {}) it.q[q] -= k.rain[q] * d; }
-  else for (const q in k.dries || {}) it.q[q] = Math.min(100, it.q[q] + k.dries[q] * d);
-  for (const q in it.q) if (it.q[q] < 0) it.q[q] = 0;
+  if (it.ps) {
+    // every piece ages on its own; broken or rotten pieces drop out of the stack
+    for (const p of it.ps) ageQ(p, k, d, slow, cool, extra, env.wet);
+    setPieces(it, it.ps.filter((p) => !dead(p)));
+    if (!it.ps.length) return true;
+  } else ageQ(it.q, k, d, slow, cool, extra, env.wet);
 
   // leaky vessels
   const c = contSpec(it);
@@ -194,6 +209,7 @@ function tickItem(s, it, env, h, cool, extra) {
         it.kind = p.to; it.q = Object.assign({}, nk.q);
         for (const q in nk.q) if (q !== 'fresh' && old[q] != null) it.q[q] = old[q];
       }
+      if (p.to && it.ps) delete it.ps; // a new kind of thing: its pieces start alike
       if (p.set) Object.assign(it.q, p.set);
       if (p.n) it.n = p.n; else if (p.y) it.n = Math.round(it.n * p.y * 100) / 100;
       say(s, `${p.name || itemName(it)} is ready${env.visible ? '' : ' at ' + env.loc.name}: ${itemName(it)}.`, 'good');
@@ -259,6 +275,8 @@ function tickList(s, list, env, h, cool) {
       }
     }
     if (it.in) tickList(s, it.in, env, h, cool || (k.cont && k.cont.cool));
+    // pieces that have aged across a tested line part company
+    if (it.ps && new Set(it.ps.map((p) => tierKey({ kind: it.kind, q: p }))).size > 1) { list.splice(list.indexOf(it), 1); addTo(list, it); }
   }
 }
 

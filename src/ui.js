@@ -8,7 +8,7 @@ import { RESOURCES } from './data/resources.js';
 import { RECIPES, GROUPS, CAP_NAMES } from './data/recipes.js';
 import { tierLabel, kindOf, itemName, amountText, massOf, contSpec, usedVol, whyNotHold, capsOf, reach, here, handsUsed, handsFor, carriedMass, missingSlots, trashHere } from './items.js';
 import { hourOf, dayOf, airTemp, feltTemp, isDark, sleepQuality, impairment, LIMITS } from './sim.js';
-import { newGame, act, gatherStatus, recipeStatus, planInput, slotSpec, waterHere, trapsHere, travelInfo, MAX_CARRY } from './actions.js';
+import { newGame, migrate, act, gatherStatus, recipeStatus, planInput, slotSpec, waterHere, trapsHere, travelInfo, MAX_CARRY } from './actions.js';
 import { dist, bearing } from './world.js';
 import { makePlanner } from './plan.js';
 import { taskList, runway } from './advice.js';
@@ -754,6 +754,7 @@ export function boot(saved) {
   S = saved || load();
   if (S && S.v !== 1) S = null;
   if (S && !S.goals) S.goals = {};
+  if (S) migrate(S);
   if (S && S.project) S.project = { 'x.eat': 'need:food', 'x.drink': 'need:water', 'x.sleep': 'need:sleep', 'r.add_fuel': 'need:fire' }[S.project] || S.project;
   if (S) { ui.choices = S.choices = S.choices || {}; }
   document.addEventListener('click', (e) => {

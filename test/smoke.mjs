@@ -10,7 +10,7 @@ import { makePlanner } from '../src/plan.js';
 import { taskList } from '../src/advice.js';
 import { upkeep, projectRows, NEEDS } from '../src/econ.js';
 import { tiersOf, passRate, tierKey } from '../src/tiers.js';
-import { canMerge, capOf } from '../src/items.js';
+import { canMerge, capOf, mk, setPieces } from '../src/items.js';
 
 let failures = 0;
 const check = (cond, msg) => { if (!cond) { failures++; console.log('  FAIL:', msg); } };
@@ -51,7 +51,7 @@ check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'stat
   const u = upkeep(s);
   check(NEEDS.every((k) => u.parts[k] >= 0 && !isNaN(u.parts[k])), 'upkeep parts must be non-negative numbers: ' + JSON.stringify(u.parts));
   check(Math.abs(u.U - NEEDS.reduce((a, k) => a + u.parts[k], 0)) < 1e-9, 'upkeep must be the sum of its parts');
-  check(u.sleep.S >= 4 && u.sleep.S <= 14, 'sleep hours out of range: ' + u.sleep.S);
+  check(u.sleep.S >= 4 && u.sleep.S <= 16, 'sleep hours out of range: ' + u.sleep.S);
   const P = makePlanner(s);
   const { base, rows } = projectRows(s, P);
   check(rows.length >= 5, 'expected several projects that cut upkeep, got ' + rows.length);
@@ -84,6 +84,21 @@ check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'stat
     const keys = here(s2).items.filter((it) => it.kind === 'cobble').map(tierKey);
     check(new Set(keys).size === keys.length, 'cobble stacks on the ground should be one per tier: ' + keys.join(' | '));
   }
+}
+
+// --- pieces keep their own qualities through building and salvage
+{
+  const s3 = newGame(seed);
+  const L = here(s3);
+  const poles = mk(s3, 'pole', 1, { strength: 30 });
+  setPieces(poles, [{ straightness: 50, strength: 30, integrity: 100 }, { straightness: 50, strength: 35, integrity: 100 }, { straightness: 50, strength: 41, integrity: 100 }]);
+  L.items.push(poles, mk(s3, 'leaves', 8));
+  check(act(s3, { t: 'recipe', id: 'build_windbreak' }).ok, 'windbreak should build from three poles and leaves');
+  const wb = L.items.find((it) => it.kind === 'windbreak');
+  check(wb && wb.parts.frame.ps && wb.parts.frame.ps.length === 3, 'the frame should remember its three poles');
+  act(s3, { t: 'dismantle', id: wb.id });
+  const back = L.items.filter((it) => it.kind === 'pole').flatMap((it) => (it.ps || [it.q]).map((q) => Math.round(q.strength))).sort();
+  check(JSON.stringify(back) === JSON.stringify([30, 35, 41]), 'salvage should return each pole as it was: ' + back);
 }
 
 // --- a greedy bot: tries to stay alive and make everything it can

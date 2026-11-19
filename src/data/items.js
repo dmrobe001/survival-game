@@ -58,9 +58,10 @@ K('kindling', { name: 'kindling', unit: 'kg', vol: 5, grain: 25, hand: 1, tags: 
   q: { dryness: 60 }, rain: { dryness: 300 }, dries: { dryness: 20 } });
 K('firewood', { name: 'firewood', unit: 'kg', vol: 2.5, grain: 50, hand: 5, tags: ['fuel'], fuel: 0.4,
   q: { dryness: 60 }, rain: { dryness: 150 }, dries: { dryness: 10 } });
-K('pole', { name: 'pole', mass: 2.5, vol: 5, grain: 200, hand: 2, tags: ['pole'],
-  q: { straightness: 50, integrity: 100 }, decay: { integrity: 0.15 }, caps: { pound: () => 25, hunt: () => 10 } });
-K('shaft', { name: 'shaft', mass: 0.7, vol: 1.5, grain: 150, hand: 3, tags: ['shaft', 'haft', 'handle', 'hardenable'],
+K('pole', { name: 'pole', mass: 2.5, vol: 5, grain: 200, hand: 2, tags: ['pole', 'rib', 'straightenable'],
+  q: { straightness: 50, strength: 50, integrity: 100 }, decay: { integrity: 0.15 }, caps: { pound: () => 25, hunt: () => 10 } });
+K('stick', { name: 'stick', mass: 0.4, vol: 1, grain: 100, hand: 10, tags: ['rib'], q: { integrity: 100 }, decay: { integrity: 0.3 } });
+K('shaft', { name: 'shaft', mass: 0.7, vol: 1.5, grain: 150, hand: 3, tags: ['shaft', 'haft', 'handle', 'hardenable', 'straightenable'],
   q: { straightness: 60, hardness: 30, integrity: 100 }, decay: { integrity: 0.1 },
   caps: { dig: (it) => 10 + 0.15 * Q(it, 'hardness'), hunt: () => 12 }, wear: { dig: { _: { integrity: 6 } } } });
 K('stalk', { name: 'dry stalk', mass: 0.04, vol: 0.2, grain: 60, hand: 12,
@@ -270,7 +271,8 @@ K('leggings', { name: 'buckskin leggings', mass: 0.8, vol: 3, grain: 30, q: { in
 K('hide_cloak', { name: 'hide cloak', mass: 1.3, vol: 5, grain: 40, q: { integrity: 100 }, decay: { integrity: 0.15 }, worn: { slot: 'cloak', warm: 5, rain: true } });
 
 // ------------------------------------------------------------ structures (fixed composites)
-const frameOK = (it) => sound(P(it, 'frame'));
+// the frame stands if every load-bearing part is sound: uprights, ridge pole, ribs
+const frameOK = (it) => ['frame', 'ridge', 'ribs'].reduce((a, sl) => a * (sl in (KINDS[it.kind].slots || {}) ? sound(P(it, sl)) : 1), 1);
 const coverOK = (it, slot = 'cover') => { const c = P(it, slot); return c ? sound(c) * (KINDS[c.kind].coverQ || 0.7) : 0; };
 
 K('windbreak', { name: 'windbreak', fixed: true,
@@ -278,13 +280,13 @@ K('windbreak', { name: 'windbreak', fixed: true,
   caps: { shelter: (it) => 28 * frameOK(it) * coverOK(it) },
   build: { group: 'Shelter and camp', time: 40, met: 3.5, tools: [], desc: 'Poles propped against each other and stuffed with whatever is to hand. Takes the edge off the wind.' } });
 K('lean_to', { name: 'lean-to', fixed: true,
-  slots: { frame: { tag: 'pole', n: 5 }, cover: { tag: 'cover', kg: 20 }, lashing: { tag: 'binding', n: 4, opt: true } }, partDecay: { cover: { integrity: 1.5 } },
+  slots: { ridge: { tag: 'pole', n: 1, q: { strength: 45 } }, frame: { tag: 'pole', n: 2 }, ribs: { tag: 'rib', n: 10 }, cover: { tag: 'cover', kg: 20 }, lashing: { tag: 'binding', n: 4, opt: true } }, partDecay: { cover: { integrity: 1.5 } },
   caps: { shelter: (it) => (45 + (P(it, 'lashing') ? 8 : 0)) * frameOK(it) * coverOK(it), roof: (it) => 60 * frameOK(it) * coverOK(it) },
   build: { group: 'Shelter and camp', time: 120, met: 3.5, tools: [], desc: 'A sloped roof open to a fire on one side. Keeps rain off you and your tinder.' } });
 K('debris_hut', { name: 'debris hut', fixed: true,
-  slots: { frame: { tag: 'pole', n: 7 }, cover: { tag: 'insulation', kg: 45 } }, partDecay: { cover: { integrity: 1.5 } },
+  slots: { ridge: { tag: 'pole', n: 1, q: { strength: 50 } }, frame: { tag: 'pole', n: 2 }, ribs: { tag: 'rib', n: 25 }, cover: { tag: 'insulation', kg: 45 } }, partDecay: { cover: { integrity: 1.5 } },
   caps: { shelter: (it) => 72 * frameOK(it) * sound(P(it, 'cover')), roof: (it) => 60 * frameOK(it) * sound(P(it, 'cover')) },
-  build: { group: 'Shelter and camp', time: 180, met: 3.5, tools: [], desc: 'A body-sized cocoon under an arm\'s depth of debris. Warm without fire, and needs no cordage.' } });
+  build: { group: 'Shelter and camp', time: 120, met: 3.5, tools: [], desc: 'A body-sized cocoon under an arm\'s depth of debris. Warm without fire, and needs no cordage.' } });
 K('hut', { name: 'thatched hut', fixed: true,
   slots: { frame: { tag: 'pole', n: 14 }, wattle: { tag: 'withy', n: 40 }, cover: { tag: 'thatch', kg: 60 }, lashing: { tag: 'binding', n: 15 } }, partDecay: { cover: { integrity: 0.4 } },
   caps: { shelter: (it) => 92 * frameOK(it) * coverOK(it) * sound(P(it, 'lashing'), 30), roof: (it) => 95 * frameOK(it) * coverOK(it) },
@@ -294,7 +296,7 @@ K('bed', { name: 'bedding pile', fixed: true,
   caps: { bed: (it) => 55 * sound(P(it, 'bedding'), 60) },
   build: { group: 'Shelter and camp', time: 15, tools: [], desc: 'A thick mattress between you and the ground, which otherwise drinks your heat all night. It packs down; refresh it.' } });
 K('raised_bed', { name: 'raised bed', fixed: true,
-  slots: { frame: { tag: 'pole', n: 4 }, lashing: { tag: 'binding', n: 3 }, bedding: { tag: 'insulation', kg: 8 } }, partDecay: { bedding: { integrity: 2 } },
+  slots: { frame: { tag: 'pole', n: 4, q: { strength: 45 } }, lashing: { tag: 'binding', n: 3 }, bedding: { tag: 'insulation', kg: 8 } }, partDecay: { bedding: { integrity: 2 } },
   caps: { bed: (it) => 88 * frameOK(it) * sound(P(it, 'bedding'), 60) },
   build: { group: 'Shelter and camp', time: 90, tools: [], desc: 'A lashed platform off the damp ground, topped with bedding.' } });
 K('hearth', { name: 'stone hearth', fixed: true, slots: { ring: { tag: 'cobble', n: 8 } },

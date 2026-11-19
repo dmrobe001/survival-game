@@ -6,18 +6,28 @@ import { KINDS } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
 import { RECIPES } from './data/recipes.js';
 import { kindOf, here, reach, contSpec } from './items.js';
-import { recipeStatus, gatherStatus, waterHere, travelInfo, trapsHere } from './actions.js';
+import { recipeStatus, gatherStatus, waterHere, travelInfo, trapsHere, reqText } from './actions.js';
 import { feltTemp, raining, LIMITS, thirstRate } from './sim.js';
 import { fmt, fmtTime } from './util.js';
 
 // ------------------------------------------------------------------ tasks
 // A task is something you can do right now with one tap.
-function gatherTask(s, rid, why) {
+// o: {wants: [{n, req}]} to collect set amounts (some needing to be good
+// enough for something), {min} for a stretch of time; by default both
+// hands' worth.
+function gatherTask(s, rid, why, o = {}, minutes = 0) {
   const st = gatherStatus(s, rid);
   if (!st || !st.r.known || !st.ok) return null;
-  const k = KINDS[RESOURCES[rid].gather.kind];
-  return { key: 'g.' + rid, name: 'Collect ' + k.name, cmd: { t: 'gather', rid, min: 30 }, minutes: 30, met: RESOURCES[rid].gather.met || 3, mode: 'act', why,
-    note: `${fmt(st.rate)}${k.unit === 'ea' ? '' : ' ' + k.unit}/h` };
+  const k = KINDS[RESOURCES[rid].gather.kind], rate = Math.max(st.rate, 1e-3);
+  const wants = o.min ? null : o.wants && o.wants.length ? o.wants : [{ n: 2 * k.hand }];
+  const n = wants ? wants.reduce((a, w) => a + w.n, 0) : 0;
+  const amt = (x) => (k.unit === 'ea' ? `${Math.max(1, Math.round(x))}` : `${fmt(x)} ${k.unit}`);
+  const strict = wants ? wants.filter((w) => w.req) : [];
+  const plural = k.unit === 'ea' && Math.round(n) > 1 && !k.name.endsWith('s') ? k.name + 's' : k.name;
+  const name = o.min ? `Collect ${k.name}` : `Collect ${amt(n)}${k.unit === 'ea' ? ' ' : ' of '}${plural}${strict.length ? ` (${strict.map((w) => (wants.length > 1 ? amt(w.n) + ' ' : '') + reqText(w.req)).join('; ')})` : ''}`;
+  const mins = o.min || minutes || Math.max(2, (60 * n) / rate);
+  return { key: 'g.' + rid, name, cmd: o.min ? { t: 'gather', rid, min: o.min } : { t: 'gather', rid, wants }, minutes: mins, met: RESOURCES[rid].gather.met || 3, mode: 'act', why,
+    note: `${fmt(rate)}${k.unit === 'ea' ? '' : ' ' + k.unit}/h` };
 }
 
 function recipeTask(s, rid, why) {
@@ -28,14 +38,14 @@ function recipeTask(s, rid, why) {
   return { key: 'r.' + rid, name: r.name, cmd: { t: 'recipe', id: rid, choose: (s.choices || {})[rid] || {} }, minutes: Math.min(st.time, 120), met: r.met, mode: 'act', why, note: st.time > 150 && !r.outdoor ? `${fmtTime(st.time)} in all` : '' };
 }
 
-function taskForStep(s, P, key, why) {
+function taskForStep(s, P, key, why, step) {
   const n = P.node(key);
   if (!n.ready || n.passive) return null;
   if (n.recipe) return recipeTask(s, n.recipe.id, why);
   const rid = key.slice(2).split('@')[0];
   const reason = P.whyOf(key);
   if (reason) why = reason;
-  if (n.w.mode === 'here') return gatherTask(s, rid, why);
+  if (n.w.mode === 'here') return gatherTask(s, rid, why, step && step.wants ? { wants: step.wants } : {}, step && step.wants && step.wants.some((w) => w.req) ? step.minutes : 0);
   if (n.w.mode === 'goto') { const info = travelInfo(s, n.w.to); return { key: 'go.' + n.w.to, name: `Walk to ${s.locs[n.w.to].name.toLowerCase()}`, cmd: { t: 'travel', to: n.w.to }, minutes: info.minutes, met: info.met, mode: 'travel', why: why || `for ${RESOURCES[rid].name.toLowerCase()}`, note: `${fmt(info.km)} km` }; }
   return { key: 'x.find.' + rid, name: `Explore for ${reason ? 'better ' : ''}${RESOURCES[rid].name.toLowerCase()}`, cmd: { t: 'explore', hours: n.w.hours, targets: [rid] }, minutes: n.w.hours * 60, met: 3.5, mode: 'travel', why,
     note: reason ? 'quality varies by place' : `about ${Math.round(n.w.p * 100)}% chance per trip` };
@@ -63,7 +73,7 @@ export function taskList(s, P, sel, up) {
       for (const { it } of reach(s)) if (kindOf(it).food && (it.q.tannin || 0) <= 25) push({ key: 'e.' + it.kind, name: `Eat ${kindOf(it).name}`, cmd: { t: 'eat', id: it.id }, minutes: 10, met: 1.5, mode: 'rest', note: `${Math.round(kindOf(it).food.kcal * Math.min(it.n, kindOf(it).food.portion))} kcal` }, true);
       for (const m of up ? up.food.mix : []) {
         const why = m.how.join(', ') + (m.sus ? '' : ' (you are using more than regrows here)');
-        if (m.method === 'collect') { const t = gatherTask(s, m.rid, why); if (t) { t.note = `~${Math.round(m.kcal / Math.max(m.hours, 1e-3))} kcal/h`; push(t, true); } }
+        if (m.method === 'collect') { const t = gatherTask(s, m.rid, why, { min: 30 }); if (t) { t.note = `~${Math.round(m.kcal / Math.max(m.hours, 1e-3))} kcal/h`; push(t, true); } }
         for (const rid of (METHOD_RECIPES[m.method] || {})[m.rid] || []) push(recipeTask(s, rid, why), true);
       }
       if (trapsHere(s).length) push({ key: 'traps', name: `Check ${trapsHere(s).length} trap${trapsHere(s).length > 1 ? 's' : ''}`, cmd: { t: 'checkTraps' }, minutes: 10 + 3 * trapsHere(s).length, met: 3, mode: 'act' }, true);
@@ -82,7 +92,7 @@ export function taskList(s, P, sel, up) {
     }
   } else if (sel) {
     if (sel.prog) push({ key: 'w.' + sel.prog.id, name: `Keep working: ${sel.name.toLowerCase()}`, cmd: { t: 'work', id: sel.prog.id }, minutes: Math.min(120, sel.prog.proj.left), met: RECIPES[sel.prog.proj.rid].met, mode: 'act', note: `${fmtTime(sel.prog.proj.left)} left` }, true);
-    for (const st of sel.node.steps) push(taskForStep(s, P, st.key, st.key === sel.key ? '' : 'toward ' + sel.name.toLowerCase()), true);
+    for (const st of sel.node.steps) push(taskForStep(s, P, st.key, st.key === sel.key ? '' : 'toward ' + sel.name.toLowerCase(), st), true);
   }
   // 2. everything else you could do right now
   for (const it of L.items) if (it.proj) push({ key: 'w.' + it.id, name: `Keep working: ${it.proj.name}`, cmd: { t: 'work', id: it.id }, minutes: Math.min(120, it.proj.left), met: RECIPES[it.proj.rid].met, mode: 'act', note: `${fmtTime(it.proj.left)} left` });
