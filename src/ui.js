@@ -426,7 +426,7 @@ const resName = (rid) => (RESOURCES[rid].gather ? KINDS[RESOURCES[rid].gather.ki
 function needLines(need, up) {
   const L = [];
   if (need === 'food') {
-    for (const m of up.food.mix) L.push(`${m.method === 'collect' ? resName(m.rid) : `${resName(m.rid)} by ${m.method}`}${m.how.length ? ', ' + m.how.join(', ') : ''} · ${Math.round(m.kcal)} kcal · ${hrs(m.hours)} h${m.sus ? '' : ' · further afield'}`);
+    for (const m of up.food.mix) L.push(`${m.method === 'collect' ? resName(m.rid) : `${resName(m.rid)} by ${m.method}`}${m.at ? ` from ${S.locs[m.at].name.toLowerCase()}` : ''}${m.how.length ? ', ' + m.how.join(', ') : ''} · ${Math.round(m.kcal)} kcal · ${hrs(m.hours)} h${m.sus ? '' : ' · further afield'}`);
     if (up.food.short) L.push(`${Math.round(up.food.short)} of ${Math.round(up.E)} kcal a day is more than regrows here, so it adds a walk out each day (counted as 1 h).`);
     if (up.food.unmet) L.push(`No known way to get ${Math.round(up.food.unmet)} kcal a day here.`);
   }

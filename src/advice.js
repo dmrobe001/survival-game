@@ -73,7 +73,7 @@ const edible = (it) => { const f = kindOf(it).food; return f && (it.q.tannin || 
 // you are: if you already hold acorn meal, the next step is leaching it.
 function foodChain(s, P, up) {
   const mix = up ? up.food.mix.filter((m) => m.sus).sort((a, b) => b.kcal - a.kcal) : [];
-  const m = mix[0];
+  const m = mix.find((x) => !x.at) || mix[0]; // what is here first; else the place you would fetch it from
   if (!m) return null;
   const def = RESOURCES[m.rid], g = def.gather;
   let units = MEAL / Math.max(m.v, 1), bitter = g ? (KINDS[g.kind].q.tannin || 0) > 25 : false;
@@ -101,8 +101,14 @@ function foodChain(s, P, up) {
     const ready = recipeTask(s, st.rid, ''), n = ready ? null : P.node('r.' + st.rid);
     return { task: ready || firstTask(s, P, n, ''), prepH: (ready ? st.h : Math.max(st.h, hoursOf(n))) + later };
   }
-  // nothing in hand yet: collect a meal's worth
+  // nothing in hand yet: collect a meal's worth (going there first, if it is elsewhere)
   const prep = stages.reduce((a, x) => a + x.h, 0) + 1 / 6;
+  if (m.at) {
+    const info = travelInfo(s, m.at), n = MEAL / Math.max(m.v, 1);
+    const collectH = n / Math.max(def.gather ? def.gather.rate * 0.6 : 1, 1e-3);
+    return { task: { key: 'go.' + m.at, name: `Walk to ${s.locs[m.at].name.toLowerCase()}`, cmd: { t: 'travel', to: m.at }, minutes: info.minutes, met: info.met, mode: 'travel', note: `${fmt(info.km)} km` },
+      prepH: (2 * info.minutes) / 60 + collectH + prep };
+  }
   if (m.method === 'collect') {
     const gs = gatherStatus(s, m.rid), n = MEAL / Math.max(m.v, 1);
     if (!gs || !gs.ok || gs.r.amt < n) return null;

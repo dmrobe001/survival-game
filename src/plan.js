@@ -20,7 +20,7 @@
 import { KINDS } from './data/items.js';
 import { RESOURCES, PLACE_HA, encounter } from './data/resources.js';
 import { RECIPES, CAP_NAMES } from './data/recipes.js';
-import { capOf, reach, here, pieceKind } from './items.js';
+import { capOf, reach, here, pieceKind, contSpec } from './items.js';
 import { capInfo, planInput, recipeStatus, gatherStatus, travelInfo, bagFor } from './actions.js';
 import { genLocation, prospect } from './world.js';
 import { passRate, pieceSpread, searchSpread, pieceSize } from './tiers.js';
@@ -215,7 +215,7 @@ export function makePlanner(s, extra = null) {
     for (const rid of T.gatherers[kind] || []) {
       const g = RESOURCES[rid].gather, w = resWhere(rid);
       const rate = Math.max(1e-3, w.mode === 'here' ? gatherStatus(s, rid).rate : w.mode === 'goto' ? encounter(RESOURCES[rid], s.locs[w.to].res[rid].amt / PLACE_HA, boostLv(rid)) : g.rate * 0.5);
-      opts.push({ type: 'gather', rid, w, setup: w.m + (g.tool ? capEst(g.tool.cap, g.tool.min).m : 0), unit: 60 / rate });
+      opts.push({ type: 'gather', rid, kind, w, setup: w.m + (g.tool ? capEst(g.tool.cap, g.tool.min).m : 0), unit: 60 / rate });
     }
     for (const p of T.producers[kind] || []) {
       const r = RECIPES[p.rid];
@@ -229,7 +229,29 @@ export function makePlanner(s, extra = null) {
     if (!stack.size) optMemo[kind] = opts; // only cache results that no cycle guard truncated
     return opts;
   }
-  const cost = (o, n) => (o.type === 'gather' ? o.setup + Math.max(5, o.unit * n) : o.setup + Math.ceil(n / o.n0 - 1e-9) * o.per);
+  const cost = (o, n) => (o.type === 'gather' ? o.setup + Math.max(5, o.unit * n) + haul(o.w, o.kind, n) : o.setup + Math.ceil(n / o.n0 - 1e-9) * o.per);
+  // Units of a kind you can carry in one trip with what you hold now: both
+  // hands, plus the best container that holds it, within what you can lift.
+  const carryMemo = {};
+  function carryNow(kind) {
+    if (carryMemo[kind] != null) return carryMemo[kind];
+    const k = KINDS[kind];
+    let cont = 0, drag = 1;
+    for (const { it } of reach(s)) {
+      const c = contSpec(it);
+      if (!c || c.liquid || KINDS[it.kind].fixed || k.grain < c.mesh) continue;
+      if (c.vol / k.vol > cont) { cont = c.vol / k.vol; drag = c.drag || 1; }
+    }
+    return (carryMemo[kind] = Math.max(1e-6, Math.min(35 / (k.mass * drag), (k.hands === 2 ? 1 : 2 * k.hand) + cont)));
+  }
+  // Minutes of walking beyond the first trip out: back home, and out and
+  // back again for every further load. A searched-for place is about as far
+  // as the walk after a successful search.
+  function haul(w, kind, n) {
+    if (!w || w.mode === 'here' || !kind) return 0;
+    const oneWay = w.mode === 'goto' ? w.m : ((0.55 * 0.9 * w.hours) / 3.2) * 60;
+    return (2 * Math.ceil(n / carryNow(kind) - 1e-9) - 1) * oneWay;
+  }
   const round5 = (m) => Math.max(5, Math.ceil(m / 5 - 1e-9) * 5);
   // how much a helping tool you hold speeds the handling
   function boostLv(rid) {
@@ -276,7 +298,8 @@ export function makePlanner(s, extra = null) {
     const b = srcMemo[mk];
     if (b.none) return { m: Infinity };
     const g = RESOURCES[rid].gather, tool = g.tool ? capEst(g.tool.cap, g.tool.min).m : 0;
-    return Object.assign({ m: b.w.m + b.collect + tool }, b);
+    const carried = haul(b.w, kind, pieces * pieceSize(kind));
+    return Object.assign({}, b, { m: b.w.m + b.collect + carried + tool, collect: b.collect + carried });
   }
 
   // The cheapest way to hold `cap` at `min` or better.
@@ -365,7 +388,7 @@ export function makePlanner(s, extra = null) {
         const g = RESOURCES[b.o.rid].gather;
         key = 'g.' + b.o.rid;
         if (g.tool) needCap(g.tool.cap, g.tool.min, key);
-        add({ key, minutes: b.o.w.m + round5(b.o.unit * n), wait: 0, times: 1, wants: [{ n }] }, forKey);
+        add({ key, minutes: b.o.w.m + round5(b.o.unit * n) + haul(b.o.w, kind, n), wait: 0, times: 1, wants: [{ n }] }, forKey);
       } else key = recipe(b.o.rid, Math.ceil(n / b.o.n0 - 1e-9), forKey, b.o.wait, false);
       active.delete(kind);
       for (const c in T.capKinds) { const hit = T.capKinds[c].find((x) => x.kind === kind); if (hit) planned[c] = Math.max(planned[c] || 0, hit.level); }

@@ -101,6 +101,19 @@ check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'stat
   check(JSON.stringify(back) === JSON.stringify([30, 35, 41]), 'salvage should return each pole as it was: ' + back);
 }
 
+// --- hauling: a known place elsewhere supplies goods at collect-plus-carry prices
+{
+  const s4 = newGame(seed);
+  const home = here(s4), far = JSON.parse(JSON.stringify(home));
+  Object.assign(far, { id: 'L99', x: home.x + 1.5, y: home.y, items: [], trash: [] });
+  for (const r in far.res) far.res[r].known = true;
+  s4.locs.L99 = far;
+  for (const r of Object.keys(home.res)) if (RESOURCES[r].gather && (KINDS[RESOURCES[r].gather.kind].food || KINDS[RESOURCES[r].gather.kind].crush)) delete home.res[r];
+  const u0 = upkeep(s4, ['cobble']), u1 = upkeep(s4, ['cobble', 'pack_basket']);
+  check(u0.food.mix.some((m) => m.at === 'L99'), 'food should be fetched from the known place 1.5 km away');
+  check(u1.parts.food < u0.parts.food, `a pack basket should make fetching food cheaper (${u0.parts.food.toFixed(2)} -> ${u1.parts.food.toFixed(2)} h)`);
+}
+
 // --- a greedy bot: tries to stay alive and make everything it can
 const s = newGame(seed);
 const made = new Set();

@@ -201,7 +201,9 @@ better piece of the same kind.
 
 The planner prices a collecting step as the expected time to the pieces it
 needs: pieces ÷ (encounter rate with p), comparing here, every known place
-(plus the walk) and searching. Pass fractions come from 200 fixed normal
+and searching, plus the walking: home again, and out and back for every
+further load beyond what you can carry at once (a searched-for place is
+taken to be as far as the walk after a successful search). Pass fractions come from 200 fixed normal
 draws per deposit, so they are deterministic. The upkeep evaluator values
 a collected tool as the typical best of one half-hour trip.
 
@@ -267,6 +269,19 @@ afield": country like this (the fields vary smoothly) at the same rates,
 for a daily walk (1 h, a guess) and, for firewood, the trips to carry it
 home with whatever you can carry. Food is filled cheapest first, choosing
 between living off what regrows here and walking out each day.
+
+**Hauling from known places.** Every place you know is a supplier too, at
+
+    hours per unit = collecting there + round trip ÷ units carried per trip
+
+where a trip carries both hands plus the best container that holds the
+thing, within what you can lift (a dragged travois counts for part of its
+weight). The price is linear in quantity, so a known place simply competes
+with what is here in the price sweep, in food supply (as long as it
+regrows there) and in firewood. Carrying gear earns its keep this way: with
+nuts only at a place 14 minutes off, food costs 2.8 h a day by hand and
+1.6 h with a pack basket. Routes with several stops, caches and timing are
+left to the player.
 
 **Each need.**
 

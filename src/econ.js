@@ -168,6 +168,13 @@ function sweep(kit, ctx) {
     const rate = gatherRate(kit, rid, 0.85, r);
     if (rate > 0) set(g.kind, 1 / rate, 'g.' + rid);
   }
+  // known places elsewhere: collecting there, plus the trips to carry it home
+  for (const p of ctx.away) for (const rid in p.loc.res) {
+    const r = p.loc.res[rid], g = RESOURCES[rid].gather;
+    if (!r.known || !g) continue;
+    const rate = gatherRate(kit, rid, 0.85, r);
+    if (rate > 0) set(g.kind, 1 / rate + p.rt / carryUnits(kit, g.kind), 'g.' + rid + '@' + p.id);
+  }
   for (let pass = 0; pass < 8; pass++) {
     let changed = false;
     for (const rid in RECIPES) {
@@ -302,6 +309,22 @@ function foodMethods(kit, ctx, rid) {
 // further afield is eaten where it is found, so it costs only the walk.
 function foodSupply(kit, ctx, E) {
   const offers = [];
+  // known places elsewhere, as long as they regrow: collect there, carry it home
+  for (const p of ctx.away) for (const rid in p.loc.res) {
+    const r = p.loc.res[rid], def = RESOURCES[rid], g = def.gather;
+    if (!r.known || !g || !def.find || (g.tool && kit.lvl(g.tool.cap) < g.tool.min)) continue;
+    const k = KINDS[g.kind];
+    if (!(k.food || k.crush || k.roast)) continue;
+    const haul = p.rt / carryUnits(kit, g.kind);
+    for (const t of tranches(r, def)) {
+      if (!t.sus) continue;
+      const rate = gatherRate(kit, rid, t.x, r);
+      if (!(rate > 0)) continue;
+      const unitH = 1 / rate + haul, b = pick(foodRoutes(g.kind, kit, ctx, bitterOf(g.kind)), unitH, ctx.c);
+      if (!b) continue;
+      offers.push({ rid, at: p.id, method: 'collect', sel: (unitH + b.h + b.fire * ctx.c) / b.v, lab: (unitH + b.h) / b.v, fire: b.fire / b.v, n: t.n * b.v, sus: true, how: b.how, rids: b.rids, v: b.v });
+    }
+  }
   for (const rid in ctx.L.res) {
     const r = ctx.L.res[rid];
     if (!r.known) continue;
@@ -339,8 +362,8 @@ function fillFood(offers, E, c) {
     const take = Math.min(left, o.n);
     left -= take; hours += take * o.lab; fire += take * o.fire;
     if (!o.sus) { if (!short) hours += TUNE.COMMUTE; short += take; }
-    const prev = mix.find((m) => m.rid === o.rid && m.method === o.method && m.sus === o.sus);
-    if (prev) { prev.kcal += take; prev.hours += take * o.lab; } else mix.push({ rid: o.rid, method: o.method, how: o.how, rids: o.rids, v: o.v, kcal: take, hours: take * o.lab, sus: o.sus });
+    const prev = mix.find((m) => m.rid === o.rid && m.method === o.method && m.sus === o.sus && m.at === o.at);
+    if (prev) { prev.kcal += take; prev.hours += take * o.lab; } else mix.push({ rid: o.rid, at: o.at, method: o.method, how: o.how, rids: o.rids, v: o.v, kcal: take, hours: take * o.lab, sus: o.sus });
   }
   if (left > 1e-6) hours = Infinity;
   return { hours, fire, short, mix, unmet: left > 1e-6 ? left : 0, cost: hours + fire * c };
@@ -365,13 +388,23 @@ function carryUnits(kit, kind) {
 function fuelOffers(kit, ctx) {
   const out = [];
   for (const rid of ['deadwood', 'twigs']) {
-    const r = ctx.L.res[rid];
-    if (!r || !r.known) continue;
-    const kind = RESOURCES[rid].gather.kind, k = KINDS[kind], fh = k.mass * k.fuel * (0.5 + (r.q.dryness ?? 60) / 200);
-    const haul = TUNE.COMMUTE / carryUnits(kit, kind);
-    for (const t of tranches(r, RESOURCES[rid])) {
-      const rate = gatherRate(kit, rid, t.x, r);
-      if (rate > 0) out.push({ rid, n: t.n * fh, hp: (1 / rate + FEED + (t.sus ? 0 : haul)) / fh, sus: t.sus });
+    const r = ctx.L.res[rid], kind = RESOURCES[rid].gather.kind, k = KINDS[kind];
+    const fhOf = (res) => k.mass * k.fuel * (0.5 + (res.q.dryness ?? 60) / 200);
+    if (r && r.known) {
+      const fh = fhOf(r), haul = TUNE.COMMUTE / carryUnits(kit, kind);
+      for (const t of tranches(r, RESOURCES[rid])) {
+        const rate = gatherRate(kit, rid, t.x, r);
+        if (rate > 0) out.push({ rid, n: t.n * fh, hp: (1 / rate + FEED + (t.sus ? 0 : haul)) / fh, sus: t.sus });
+      }
+    }
+    for (const p of ctx.away) {
+      const r2 = p.loc.res[rid];
+      if (!r2 || !r2.known) continue;
+      const fh = fhOf(r2);
+      for (const t of tranches(r2, RESOURCES[rid])) {
+        const rate = t.sus && gatherRate(kit, rid, t.x, r2);
+        if (rate > 0) out.push({ rid, at: p.id, n: t.n * fh, hp: (1 / rate + FEED + p.rt / carryUnits(kit, kind)) / fh, sus: true });
+      }
     }
   }
   return out.sort((a, b) => a.hp - b.hp);
@@ -491,7 +524,9 @@ function repairs(kit, price) {
 // ------------------------------------------------------------------ upkeep
 export function upkeep(s, extraKinds = [], baseItems = null) {
   const kit = makeKit(s, extraKinds, baseItems), cl = climate(), L = here(s);
-  const ctx = { L, fire: false, boil: false, fireHour: 0, c: 0, E: 3000, price: {} };
+  // other known places, with the hours of a round trip there and back
+  const away = Object.keys(s.locs).filter((id) => id !== s.at).map((id) => ({ id, loc: s.locs[id], rt: (2 * travelInfo(s, id).minutes) / 60 }));
+  const ctx = { L, away, fire: false, boil: false, fireHour: 0, c: 0, E: 3000, price: {} };
   let sw = sweep(kit, ctx);
   const fuel = fuelOffers(kit, ctx);
   const burn = (kit.lvl('hearth') > 0 ? 0.7 : 1) * (kit.lvl('roof') >= 40 ? 1 : cl.wetBurn); // fuel-hours burned per hour of fire
@@ -684,7 +719,7 @@ export function tagsOf(row) {
 }
 const foodName = (m) => {
   const g = RESOURCES[m.rid].gather, name = g ? KINDS[g.kind].name.replace(/ in shell$/, '') : RESOURCES[m.rid].name.toLowerCase();
-  return [m.method === 'collect' ? name : `${name} by ${m.method}`].concat(m.how).join(', ');
+  return [(m.method === 'collect' ? name : `${name} by ${m.method}`) + (m.at ? ' fetched from elsewhere' : '')].concat(m.how).join(', ');
 };
 function reasons(base, u) {
   const out = {};
