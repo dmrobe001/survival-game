@@ -7,7 +7,7 @@ import { RESOURCES } from './data/resources.js';
 import { RECIPES } from './data/recipes.js';
 import { kindOf, here, reach, contSpec, whyNotHold } from './items.js';
 import { recipeStatus, gatherStatus, waterHere, travelInfo, trapsHere, reqText } from './actions.js';
-import { feltTemp, raining, LIMITS, thirstRate, hourOf } from './sim.js';
+import { feltTemp, raining, LIMITS, thirstRate, hourOf, sleepQuality, SLEEP_RECOVERY } from './sim.js';
 import { fmt, fmtTime } from './util.js';
 
 // ------------------------------------------------------------------ tasks
@@ -174,7 +174,7 @@ function fireChain(s, P, hours) {
 function needTasks(s, P, up, top) {
   const met = top ? top.met : 2.5, mode = top ? top.mode : 'act', topH = top ? top.minutes / 60 : 0.5;
   const lines = runway(s, { met, mode });
-  const until = (name) => { const l = lines.find((x) => x.name === name); return !l ? Infinity : l.low ? 0 : l.h; };
+  const until = (name) => { const l = lines.find((x) => x.name === name); return !l ? Infinity : l.low ? 0 : l.rec ? Infinity : l.h; };
   const due = [];
   const consider = (task, prepH, lineH) => { if (task && isFinite(prepH) && lineH - prepH - topH <= 0) due.push({ task, slack: lineH - prepH - topH }); };
   const burn = 70 * met;
@@ -277,7 +277,11 @@ export function runway(s, task) {
     : { name: 'Water', frac: wf(c.thirst), tfrac: wf(L.water.ok), low: true, h: Math.max(0, L.water.harm - c.thirst) / tr, word: 'thirsty · until harmed' });
   const fr = mode === 'sleep' || met <= 1.3 ? 0 : (met - 1.2) * 2 + 0.6;
   const sf = (x) => 1 - x / L.stamina.harm;
-  lines.push(c.fatigue < L.stamina.ok
+  // asleep or resting, fatigue falls: say how long until you are rested
+  const rec = mode === 'sleep' ? SLEEP_RECOVERY * sleepQuality(s) : met <= 1.3 ? 3 : 0;
+  if (rec && c.fatigue > 3) lines.push({ name: 'Stamina', frac: sf(c.fatigue), tfrac: sf(L.stamina.ok), rec: true, low: c.fatigue >= L.stamina.ok, h: c.fatigue / rec,
+    word: (c.fatigue >= L.stamina.ok ? 'tired · ' : '') + (mode === 'sleep' ? 'until rested' : 'until rested, resting') });
+  else lines.push(c.fatigue < L.stamina.ok
     ? { name: 'Stamina', frac: sf(c.fatigue), tfrac: sf(L.stamina.ok), h: fr ? (L.stamina.ok - c.fatigue) / fr : Infinity, word: 'until tired' }
     : { name: 'Stamina', frac: sf(c.fatigue), tfrac: sf(L.stamina.ok), low: true, h: fr ? (L.stamina.harm - c.fatigue) / fr : Infinity, word: 'tired · until you drop' });
   const T = feltTemp(s, met, mode), cr = T < 12 ? (12 - T) * 0.9 : 0;
@@ -288,6 +292,7 @@ export function runway(s, task) {
   const fire = here(s).items.find((it) => it.kind === 'fire');
   if (fire) lines.push({ name: 'Fire', frac: Math.min(1, fire.q.fuel / 6), tfrac: 0, h: fire.q.fuel / (raining(s) ? 2 : 1), word: 'until embers' });
   // already-impaired reserves first (soonest harm first), then the rest by time to their comfort line
-  lines.sort((a, b) => (b.low ? 1 : 0) - (a.low ? 1 : 0) || a.h - b.h);
+  // (a reserve that is filling back up goes last: it is not running out)
+  lines.sort((a, b) => (b.low ? 1 : 0) - (a.low ? 1 : 0) || (a.rec ? 1 : 0) - (b.rec ? 1 : 0) || a.h - b.h);
   return lines;
 }
