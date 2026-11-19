@@ -106,7 +106,10 @@ export const SLEEP_RECOVERY = 8;
 export const LIMITS = { food: { ok: 800, full: 3000 }, water: { ok: 1, harm: 4.5 }, stamina: { ok: 60, harm: 100 }, warmth: { ok: 30, harm: 70 } };
 
 // Litres per hour: about 2.4 L a day at rest, several times that working hard.
-export const thirstRate = (met, sick) => (0.1 + 0.12 * Math.max(0, met - 1)) * (sick ? 2.2 : 1);
+// Asleep, the body holds water back (antidiuretic hormone rises at night and
+// urine output roughly halves), so a night costs about 0.5 L, not 0.9.
+export const NIGHT_WATER = 0.6;
+export const thirstRate = (met, sick, asleep) => (0.1 + 0.12 * Math.max(0, met - 1)) * (sick ? 2.2 : 1) * (asleep ? NIGHT_WATER : 1);
 
 export function impairment(s) {
   const c = s.c, L = LIMITS, why = [];
@@ -137,7 +140,7 @@ function tickBody(s, h, met, mode) {
   c.glyc -= met * 70 * h;
   if (c.glyc < 0) { c.fat += c.glyc; c.glyc = 0; }
   // water
-  c.thirst += h * thirstRate(met, sick);
+  c.thirst += h * thirstRate(met, sick, mode === 'sleep');
   // fatigue
   if (mode === 'sleep') c.fatigue -= SLEEP_RECOVERY * sleepQuality(s) * h;
   else if (met <= 1.3) c.fatigue -= 3 * h;

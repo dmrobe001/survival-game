@@ -31,7 +31,7 @@ import { RECIPES, CAP_NAMES } from './data/recipes.js';
 import { capOf, contSpec, reach, here } from './items.js';
 import { travelInfo, planInput } from './actions.js';
 import { typical, sample, yieldsOf, outputsOf, kindsFor, unitsOf, makePlanner } from './plan.js';
-import { WEATHER, SLEEP_RECOVERY } from './sim.js';
+import { WEATHER, SLEEP_RECOVERY, NIGHT_WATER } from './sim.js';
 import { SEASONS, seasonOf, dayOfYear, daysLeftInSeason, seasonalT, monthOf } from './calendar.js';
 import { pieceSpread, piecesIn, bestOf } from './tiers.js';
 import { clamp, fmt } from './util.js';
@@ -566,7 +566,7 @@ function seasonSnap(s, kit, ctx, o) {
     const sl = sleepNeed(s, kit, nightFire, o.doy);
     const awake = 24 - sl.S;
     ctx.E = 70 * (0.95 * sl.S + TUNE.MET_AWAKE * awake + 0.4 * sl.cold);
-    const W = 0.1 * sl.S + (0.1 + 0.12 * (TUNE.MET_AWAKE - 1)) * awake;
+    const W = 0.1 * NIGHT_WATER * sl.S + (0.1 + 0.12 * (TUNE.MET_AWAKE - 1)) * awake;
     ctx.c = nightFire ? 0 : ctx.fireHour;
     ctx.uc = {}; ctx.fr = {};
     const food = foodSupply(kit, ctx, ctx.E);

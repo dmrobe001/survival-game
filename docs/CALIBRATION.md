@@ -57,12 +57,12 @@ Whole-task times at a synthetic typical place (every resource the environment su
 | A day's food from nuts in autumn, with a hammerstone | woodland | cobble | 1.24 h | 1.2–6 h | ok | ethnographic nut return rates: roughly 1,000-2,500 kcal per hour once processed, more in a rich autumn |
 | Sleep on bare ground | woodland | nothing | 13.0 h | 9–15 h | ok | cold, broken sleep: long hours for little rest |
 | Sleep in a debris hut on a bed | woodland | bed, debris_hut | 8.42 h | 6.5–9.5 h | ok | a warm, dry night |
-| Water a day | woodland | nothing | 3.99 L | 3–6 L | ok | about 2.5 L at rest, more with work |
-| Upkeep in summer with a basic camp | woodland | cobble, flake, stalk, hearth_board, bed, debris_hut | 14.9 h | 10–17 h | ok | with tools, fire, bed and hut, staying alive should leave a good part of the day free |
+| Water a day | woodland | nothing | 3.47 L | 3–6 L | ok | about 2.5 L at rest, more with work |
+| Upkeep in summer with a basic camp | woodland | cobble, flake, stalk, hearth_board, bed, debris_hut | 14.8 h | 10–17 h | ok | with tools, fire, bed and hut, staying alive should leave a good part of the day free |
 
 ## Sensitivity
 
-Elasticity of upkeep: the % change in hours a day per 1% change in the parameter (computed with a 10% change). Cases: bare-handed (woodland, 61.0 h/day); basic camp (woodland, 13.6 h/day); meadow, stone tools (meadow, 61.2 h/day). Largest first; parameters with no effect in any case are omitted.
+Elasticity of upkeep: the % change in hours a day per 1% change in the parameter (computed with a 10% change). Cases: bare-handed (woodland, 60.7 h/day); basic camp (woodland, 13.5 h/day); meadow, stone tools (meadow, 60.9 h/day). Largest first; parameters with no effect in any case are omitted.
 
 | Parameter | bare-handed | basic camp | meadow, stone tools |
 | --- | --- | --- | --- |
@@ -70,8 +70,8 @@ Elasticity of upkeep: the % change in hours a day per 1% change in the parameter
 | TUNE.TIRE | +0.04 | +0.37 | +0.05 |
 | TUNE.MET_AWAKE | +0.10 | +0.21 | +0.10 |
 | TUNE.DAY_CAP | -0.12 | · | -0.21 |
-| TUNE.HUNGER_H | +0.16 | · | +0.15 |
-| TUNE.SICK_HOURS | +0.03 | +0.10 | +0.03 |
+| TUNE.HUNGER_H | +0.15 | · | +0.15 |
+| TUNE.SICK_HOURS | +0.02 | +0.10 | +0.02 |
 | nuts density | · | -0.04 | · |
 | deadwood handling | · | +0.03 | · |
 | firewood fuel value | · | -0.03 | · |

@@ -19,7 +19,7 @@ import { pieceSpread, piecesIn, pieceSize, tierKey, tierRank, tiersOf } from './
 import { START_DOY, dayOfYear, seasonalT } from './calendar.js';
 import { kindOf, mk, itemName, label, massOf, contSpec, whyNotHold, roomFor, capOf, addTo, split, reach, find, removeFrom, canMerge,
   best, here, handsFor, handsUsed, carriedMass, wornIn, missingSlots, trashHere, tierLabel, pieceKind, piecesOf, setPieces, pieceScore, bestPieceFor, ids } from './items.js';
-import { say, advance, isDark, raining, condSev, footwear, impairment } from './sim.js';
+import { say, advance, isDark, raining, condSev, footwear, impairment, LIMITS } from './sim.js';
 
 export const MAX_CARRY = 35; // kg felt
 
@@ -234,7 +234,9 @@ function doGather(s, cmd) {
   let t = 0, seen = 0;
   const got = [];
   while (open().length && got.length * u < want - 1e-9 && t < maxH && seen < 20000) {
-    t += (u / (a * D)) * -Math.log(1 - rand(s.rng) * 0.999999); // searching for the next candidate
+    const dt = (u / (a * D)) * -Math.log(1 - rand(s.rng) * 0.999999); // searching for the next candidate
+    if (t + dt > maxH) { t = maxH; break; } // gave up before finding another
+    t += dt;
     seen++;
     const q = {};
     for (const key in r.q) q[key] = clamp(r.q[key] + (spread[key] ?? 5) * randn(s.rng), 0, 100);
@@ -346,7 +348,7 @@ function describeInput(spec, plan) {
   return `${amount} ${name}${quals.length ? ' (' + quals.join(', ') + ')' : ''}`;
 }
 
-export function recipeStatus(s, r, choose = {}) {
+export function recipeStatus(s, r, choose = {}, limit = 0) {
   const lines = [], plans = {};
   let ok = true, k = 1;
   for (const t of r.tools) {
@@ -364,7 +366,7 @@ export function recipeStatus(s, r, choose = {}) {
   }
   const used = new Map(), inLines = {};
   for (const spec of inputOrder(r)) {
-    const max = scaleMaxOf(s, r, spec);
+    const max = scaleMaxOf(s, r, spec, limit);
     const p = planInput(s, spec, choose[spec.id], max, used);
     plans[spec.id] = p;
     if (r.scale === spec.id && p.ok) k = p.k;
@@ -382,7 +384,7 @@ export function recipeStatus(s, r, choose = {}) {
     if (why) { ok = false; lines.push({ ok: false, text: why }); }
   }
   const time = r.time * (r.flat ? 1 : k) * slowdown(s, r.outdoor);
-  return { ok, lines, plans, k, time, choose };
+  return { ok, lines, plans, k, time, choose, limit };
 }
 
 // A recipe is worth showing once the player holds about half of what it needs.
@@ -400,14 +402,19 @@ export function recipeVisible(s, r, st) {
 // Inputs with quality requirements are settled first, so a plain slot
 // (ribs) cannot use up the one pole good enough for the ridge.
 const inputOrder = (r) => r.in.slice().sort((a, b) => (b.q ? 1 : 0) - (a.q ? 1 : 0));
-const scaleMaxOf = (s, r, spec) => (r.scale === spec.id ? spec.max * (spec.maxWith && capInfo(s, spec.maxWith.cap).level > 0 ? spec.maxWith.mult : 1) : 0);
+// `limit`: do no more than this much of the scaled input (a meal's worth, not the whole stack).
+const scaleMaxOf = (s, r, spec, limit) => {
+  if (r.scale !== spec.id) return 0;
+  const max = spec.max * (spec.maxWith && capInfo(s, spec.maxWith.cap).level > 0 ? spec.maxWith.mult : 1);
+  return limit ? Math.min(max, Math.max(spec.kg ?? spec.n, limit)) : max;
+};
 
 function takeInputs(s, r, st) {
   const ins = {};
   for (const spec of inputOrder(r)) {
     if (!st.plans[spec.id].ok) continue;
     // plan again on the state as it now is: earlier inputs have taken their share
-    const p = planInput(s, spec, (st.choose || {})[spec.id], scaleMaxOf(s, r, spec));
+    const p = planInput(s, spec, (st.choose || {})[spec.id], scaleMaxOf(s, r, spec, st.limit));
     if (!p.ok) continue;
     let need = p.base * (r.scale === spec.id ? st.k : 1);
     let merged = null;
@@ -494,7 +501,7 @@ const SESSION = 120; // minutes of work per click on a long job
 function doRecipe(s, cmd) {
   const r = RECIPES[cmd.id];
   if (!r) return { ok: false, msg: 'Unknown technique.' };
-  const st = recipeStatus(s, r, cmd.choose || {});
+  const st = recipeStatus(s, r, cmd.choose || {}, cmd.limit || 0);
   if (!st.ok) return { ok: false, msg: 'Missing: ' + st.lines.filter((l) => !l.ok && !l.opt).map((l) => l.text).join('; ') };
   const ins = takeInputs(s, r, st);
   if (st.time > SESSION + 30 && !r.outdoor) {
@@ -565,25 +572,30 @@ function doDismantle(s, cmd) {
 }
 
 // ------------------------------------------------------------------ eating and drinking
+// A sitting goes on until you are full (or the food runs out): about 2,000
+// kcal in the stomach. Ten minutes a portion. Something bitter, you stop
+// after a mouthful's worth.
+export const FULL = 2000;
 function doEat(s, cmd) {
   const f = find(s, cmd.id);
   const food = f && kindOf(f.it).food;
   if (!food) return { ok: false, msg: 'You cannot eat that.' };
   const c = s.c, it = f.it;
-  if (c.stomach >= 2000) return { ok: false, msg: 'You are too full to eat more.' };
-  let n = Math.min(it.n, food.portion, (2300 - c.stomach) / food.kcal);
-  if (kindOf(it).unit === 'ea') n = Math.max(1, Math.floor(n));
+  if (c.stomach >= FULL - 50) return { ok: false, msg: 'You are too full to eat more.' };
+  const tannin = it.q.tannin || 0;
+  let n = Math.min(it.n, (FULL - c.stomach) / food.kcal, tannin > 25 ? food.portion : Infinity);
+  if (kindOf(it).unit === 'ea') n = Math.min(it.n, Math.max(1, Math.floor(n)));
   if (n < 0.01) { removeFrom(f.list, it); return { ok: false, msg: 'Only crumbs were left; you brush them away.' }; }
   const share = n / food.portion;
   let kcal = food.kcal * n;
-  advance(s, 10, 1.5, 'rest');
-  const tannin = it.q.tannin || 0;
+  advance(s, clamp(10 * share, 4, 60), 1.5, 'rest');
   if (tannin > 25) { kcal *= 0.5; say(s, 'It is mouth-puckeringly bitter.', 'warn'); }
   c.stomach += kcal;
   c.thirst = Math.max(0, c.thirst - food.water * n);
   say(s, `You eat ${fmt(n)}${UNIT[kindOf(it).unit]} of ${kindOf(it).name} (${Math.round(kcal)} kcal).`);
-  let p = food.risk * share + (tannin > 25 ? 0.5 * share : 0);
-  if (it.q.fresh != null && it.q.fresh < 25) p += 0.4 * share;
+  // each portion is its own chance of a bad one
+  const per = food.risk + (tannin > 25 ? 0.5 : 0) + (it.q.fresh != null && it.q.fresh < 25 ? 0.4 : 0);
+  const p = 1 - Math.pow(1 - Math.min(per, 0.95), share);
   if (rand(s.rng) < p) addCond(s, 'gastro', 25 + Math.round(40 * rand(s.rng)));
   it.n = Math.round((it.n - n) * 1000) / 1000;
   if (it.n < 0.01) removeFrom(f.list, it);
@@ -600,7 +612,7 @@ function drink(s, liters, purity, what) {
   const c = s.c;
   c.thirst = Math.max(0, c.thirst - liters);
   advance(s, 3, 1.5, 'rest');
-  say(s, `You drink ${what}.`);
+  if (what) say(s, `You drink ${what}.`);
   const p = Math.pow((100 - purity) / 100, 2) * 0.25 * (liters / 1.5);
   if (rand(s.rng) < p) addCond(s, 'gastro', 30 + Math.round(40 * rand(s.rng)));
 }
@@ -646,16 +658,44 @@ function doRest(s, cmd) {
   return { ok: true };
 }
 
+// Thirsty in the night: with water within reach you roll over and drink
+// without really waking; with water at this place you get up, walk over and
+// come back to bed (a few minutes, and the night air); with neither, thirst
+// wakes you for good once it is bad. Brief wakings are normal and do not
+// spoil the rest; the cost is the time up and the cold.
+function nightDrink(s) {
+  const c = s.c;
+  if (c.thirst < LIMITS.water.ok) return '';
+  const jug = reach(s).find((x) => x.it.kind === 'water' && x.it.n > 0.05);
+  if (jug) {
+    const n = Math.min(c.thirst, jug.it.n);
+    jug.it.n -= n;
+    if (jug.it.n < 0.01) removeFrom(jug.list, jug.it);
+    drink(s, n, jug.it.q.purity, null);
+    return 'sip';
+  }
+  const w = waterHere(s);
+  if (w && c.thirst > 1.5) {
+    advance(s, 10, 2, 'act');
+    drink(s, Math.min(1.5, c.thirst), w.purity, null);
+    return 'up';
+  }
+  return '';
+}
+
 function doSleep(s, forced = 0) {
   const t0 = s.t;
-  let why = '';
+  let why = '', sips = 0, ups = 0;
   for (let i = 0; i < 30 && !s.dead; i++) {
     advance(s, 30, 0.95, 'sleep');
     if (forced ? s.t - t0 >= forced : s.c.fatigue <= 3 && s.t - t0 >= 60) break;
     if (s.c.chill > 85) { why = ' The cold wakes you, shivering hard.'; break; }
+    const d = nightDrink(s);
+    if (d === 'sip') sips++; else if (d === 'up') ups++;
     if (s.c.thirst > 2.5) { why = ' Thirst wakes you.'; break; }
   }
-  if (!s.dead) say(s, `You sleep for ${fmtTime(s.t - t0)}.${why}`);
+  const night = ups ? ` You get up ${ups > 1 ? ups + ' times' : 'once'} to drink.` : sips ? ' You reach for water in the night.' : '';
+  if (!s.dead) say(s, `You sleep for ${fmtTime(s.t - t0)}.${night}${why}`);
   return { ok: true };
 }
 
@@ -879,11 +919,11 @@ function doGrab(s, cmd) {
 }
 
 // Eat the most filling thing within reach that will not make you sick.
-function bestFood(s) {
+function bestFood(s, skip = null) {
   let top = null, score = 0;
   for (const { it } of reach(s)) {
     const f = kindOf(it).food;
-    if (!f || (it.q.tannin || 0) > 25 || (it.q.fresh != null && it.q.fresh < 25)) continue;
+    if (!f || (skip && skip.has(it.kind)) || (it.q.tannin || 0) > 25 || (it.q.fresh != null && it.q.fresh < 25)) continue;
     const v = f.kcal * Math.min(it.n, f.portion) * (1 - 3 * f.risk) + (it.q.fresh != null ? (100 - it.q.fresh) : 0); // eat what will spoil first
     if (v > score) { score = v; top = it; }
   }
@@ -891,11 +931,77 @@ function bestFood(s) {
 }
 export const bestFoodItem = bestFood;
 
+// Eat what is within reach, best first, until full.
+function doEatBest(s, skip = null) {
+  let ate = 0;
+  for (let i = 0; i < 8 && s.c.stomach < FULL - 50 && !s.dead; i++) {
+    const it = bestFood(s, skip);
+    if (!it || !doEat(s, { id: it.id }).ok) break;
+    ate++;
+  }
+  return ate;
+}
+
+// The stages of a food route, and what a unit going into each is worth at
+// the end, in kcal: [{r, kind, kcal}] plus the collected kind's worth.
+export function mealStages(rid, stageIds) {
+  const g = RESOURCES[rid] && RESOURCES[rid].gather;
+  if (!g) return null;
+  const st = [], ys = [];
+  let kind = g.kind;
+  for (const id of stageIds || []) {
+    const r = RECIPES[id], k = KINDS[kind], verb = id.split('_')[0], v = k && k[verb];
+    if (!r || !v) return null;
+    st.push({ r, kind, wait: verb === 'soak' || verb === 'dry' });
+    ys.push(v.y ?? 1);
+    kind = v.to || kind;
+  }
+  const end = KINDS[kind].food;
+  if (!end) return null;
+  let kcal = end.kcal;
+  for (let j = st.length - 1; j >= 0; j--) { kcal *= ys[j]; st[j].kcal = kcal; }
+  return { stages: st, raw: g.kind, rawKcal: st.length ? st[0].kcal : end.kcal, end: kind };
+}
+
+// A meal as one action: eat what is ready; else take the food that is
+// furthest along one stage on (shell, pound, roast), a meal's worth; else
+// collect enough to fill up (plus `extra` to put by). Repeats until full.
+// Stops early at a stage that leaves the food to itself (leaching, drying),
+// or when the next stage needs something you lack (the fire is out).
+function doMeal(s, cmd) {
+  const M = mealStages(cmd.rid, cmd.stages);
+  if (!M) return { ok: false, msg: 'Not a meal you know how to make.' };
+  const t0 = s.t, skip = new Set(M.stages.map((x) => x.kind));
+  let did = 0, collected = false, stop = '';
+  for (let i = 0; i < 16 && !s.dead && !stop && s.t - t0 < 300; i++) {
+    const room = FULL - s.c.stomach;
+    if (room < 50) break;
+    if (doEatBest(s, skip)) { did++; continue; }
+    let ran = false;
+    for (let j = M.stages.length - 1; j >= 0 && !ran; j--) {
+      const x = M.stages[j], need = room / x.kcal;
+      const st = recipeStatus(s, x.r, {}, need);
+      if (!st.ok) { if (st.plans.x && st.plans.x.ok) stop = 'stuck'; else continue; break; }
+      if (!doRecipe(s, { id: x.r.id, limit: need }).ok) { stop = 'stuck'; break; }
+      did++; ran = true;
+      if (x.wait) stop = 'wait';
+    }
+    if (ran || stop) continue;
+    if (collected) break;
+    const k = KINDS[M.raw], n = room / M.rawKcal + (cmd.extra || 0);
+    const res = doGather(s, { rid: cmd.rid, wants: [{ n: k.unit === 'ea' ? Math.ceil(n) : Math.round(n * 100) / 100 }] });
+    if (!res.ok) break;
+    did++; collected = true;
+  }
+  if (!did) return { ok: false, msg: 'There is nothing here to make that meal from.' };
+  return { ok: true, done: s.c.stomach >= FULL - 50 ? 'meal' : null };
+}
+
 const HANDLERS = {
   gather: doGather, recipe: doRecipe, work: doWork, replace: doReplace, dismantle: doDismantle, eat: doEat, drink: doDrink, drinkItem: doDrinkItem,
-  fill: doFill, grab: doGrab, eatBest: (s) => { const it = bestFood(s); return it ? doEat(s, { id: it.id }) : { ok: false, msg: 'Nothing worth eating within reach.' }; }, rest: doRest, sleep: (s) => doSleep(s), survey: doSurvey, checkTraps: doCheckTraps, explore: doExplore, travel: doTravel, move: doMove,
+  fill: doFill, grab: doGrab, eatBest: (s) => (doEatBest(s) ? { ok: true } : { ok: false, msg: s.c.stomach >= FULL - 50 ? 'You are too full to eat more.' : 'Nothing worth eating within reach.' }), meal: doMeal, rest: doRest, sleep: (s) => doSleep(s), survey: doSurvey, checkTraps: doCheckTraps, explore: doExplore, travel: doTravel, move: doMove,
 };
-const STRENUOUS = { gather: 1, recipe: 1, work: 1, survey: 1, checkTraps: 1, explore: 1, travel: 1, replace: 1 };
+const STRENUOUS = { meal: 1, gather: 1, recipe: 1, work: 1, survey: 1, checkTraps: 1, explore: 1, travel: 1, replace: 1 };
 
 export function act(s, cmd) {
   if (s.dead) return { ok: false, msg: 'Your story has ended.' };

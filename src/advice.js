@@ -6,7 +6,7 @@ import { KINDS } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
 import { RECIPES } from './data/recipes.js';
 import { kindOf, here, reach, contSpec, whyNotHold } from './items.js';
-import { recipeStatus, gatherStatus, waterHere, travelInfo, trapsHere, reqText } from './actions.js';
+import { recipeStatus, gatherStatus, waterHere, travelInfo, trapsHere, reqText, mealStages, FULL } from './actions.js';
 import { feltTemp, raining, LIMITS, thirstRate, hourOf, sleepQuality, SLEEP_RECOVERY } from './sim.js';
 import { fmt, fmtTime } from './util.js';
 
@@ -78,13 +78,35 @@ const edible = (it) => { const f = kindOf(it).food; return f && (it.q.tannin || 
 // food), and the time from here until you could eat: collecting, each
 // recipe of the route, and any waiting (leaching overnight). Picks up where
 // you are: if you already hold acorn meal, the next step is leaching it.
+const VERB_WORDS = { crush: (k) => (k.crush.cap === 'grind' ? 'grind' : 'shell'), roast: () => 'roast', boil: () => 'boil', soak: () => 'leach', dry: () => 'dry' };
+const andList = (w) => (w.length < 2 ? w.join('') : w.slice(0, -1).join(', ') + ' and ' + w[w.length - 1]);
+
+// Collecting, each stage and eating, as one action that runs until you are
+// full; it stops by itself at a stage that leaves the food alone (leaching).
+// `from`: the first stage still to do (0 = collect first).
+function mealTask(s, m, stages, from, collect, extra, prepH) {
+  if (!mealStages(m.rid, m.rids)) return null;
+  const rest = stages.slice(from), w = rest.findIndex((x) => x.wait);
+  const doing = w >= 0 ? rest.slice(0, w + 1) : rest;
+  const words = (collect ? ['collect'] : []).concat(doing.map((x) => x.word)).concat(w >= 0 ? [] : ['eat']);
+  const waitH = w >= 0 ? rest.slice(w).reduce((a, x) => a + x.wait, 0) : 0;
+  const minutes = Math.max(5, 60 * (prepH - waitH - (w >= 0 ? rest.slice(w + 1).reduce((a, x) => a + x.h - x.wait, 0) : 0)));
+  const name = andList(words);
+  return { key: 'meal.' + m.rid, name: name[0].toUpperCase() + name.slice(1) + ' ' + thingOf(m.rid), cmd: { t: 'meal', rid: m.rid, stages: m.rids || [], extra },
+    minutes, met: 2.5, mode: 'act', note: w >= 0 ? `then ${fmtTime(waitH * 60)} to ${doing[doing.length - 1].word}` : 'until full' };
+}
+
 function foodChain(s, P, up) {
   const mix = up ? up.food.mix.filter((m) => m.sus).sort((a, b) => b.kcal - a.kcal) : [];
   const m = mix.find((x) => !x.at) || mix[0]; // what is here first; else the place you would fetch it from
   if (!m) return null;
   const def = RESOURCES[m.rid], g = def.gather;
   // when the year's plan puts this food by, each meal's collecting takes a share for later too
-  const meal = MEAL + (up.year && up.year.putRids.includes(m.rid) ? up.year.putByToday / 2 : 0);
+  // a sitting goes on until full (actions FULL): plan for that, at least MEAL
+  const sitting = Math.max(MEAL, FULL - s.c.stomach);
+  const meal = sitting + (up.year && up.year.putRids.includes(m.rid) ? up.year.putByToday / 2 : 0);
+  const M = mealStages(m.rid, m.rids), fin = M && KINDS[M.end].food;
+  const eatH = fin ? Math.min(60, Math.max(4, (10 * sitting) / fin.kcal / fin.portion)) / 60 : 1 / 6; // ten minutes a portion
   let units = meal / Math.max(m.v, 1), bitter = g ? (KINDS[g.kind].q.tannin || 0) > 25 : false;
   // the stages: what each recipe needs going in, and how long it takes
   const stages = [];
@@ -93,7 +115,7 @@ function foodChain(s, P, up) {
     const verb = rid.split('_')[0], base = spec.n;
     const minutes = r.flat ? r.time : (r.time * Math.max(base, units)) / base;
     const wait = verb === 'soak' ? k.soak.hours : verb === 'dry' ? k.dry.hours : 0;
-    stages.push({ rid, kind, bitter, h: minutes / 60 + wait });
+    stages.push({ rid, kind, bitter, verb, wait, word: VERB_WORDS[verb] ? VERB_WORDS[verb](k) : verb, h: minutes / 60 + wait });
     const y = verb === 'crush' ? k.crush.y : verb === 'roast' ? k.roast.y : verb === 'boil' ? k.boil.y : verb === 'dry' ? k.dry.y : 1;
     if (verb === 'crush') bitter = ((k.crush.q && k.crush.q.tannin) ?? KINDS[k.crush.to].q.tannin ?? 0) > 25;
     if (verb === 'soak') bitter = false;
@@ -102,16 +124,17 @@ function foodChain(s, P, up) {
   const items = reach(s).map((x) => x.it);
   const matchesStage = (it, st) => it.kind === st.kind && (st.bitter ? (it.q.tannin || 0) > 25 : (it.q.tannin || 0) <= 25);
   for (let i = stages.length - 1; i >= 0; i--) {
-    const st = stages[i], later = stages.slice(i + 1).reduce((a, x) => a + x.h, 0) + 1 / 6;
+    const st = stages[i], later = stages.slice(i + 1).reduce((a, x) => a + x.h, 0) + eatH;
     const waiting = items.find((it) => it.kind === st.kind && it.proc && i > 0 && stages[i - 1].rid.startsWith('soak'));
     if (waiting) return { task: null, prepH: waiting.proc.left / 60 + st.h + later }; // nothing to do but wait
     if (!items.some((it) => !it.proc && matchesStage(it, st))) continue;
     // if this step cannot be done yet (the fire has gone out), its own preparation counts too
     const ready = recipeTask(s, st.rid, ''), n = ready ? null : P.node('r.' + st.rid);
-    return { task: ready || firstTask(s, P, n, ''), prepH: (ready ? st.h : Math.max(st.h, hoursOf(n))) + later };
+    const prepH = (ready ? st.h : Math.max(st.h, hoursOf(n))) + later;
+    return { task: (ready && m.method === 'collect' && !m.at && mealTask(s, m, stages, i, false, 0, prepH)) || ready || firstTask(s, P, n, ''), prepH };
   }
   // nothing in hand yet: collect a meal's worth (going there first, if it is elsewhere)
-  const prep = stages.reduce((a, x) => a + x.h, 0) + 1 / 6;
+  const prep = stages.reduce((a, x) => a + x.h, 0) + eatH;
   if (m.at) {
     const info = travelInfo(s, m.at), n = meal / Math.max(m.v, 1);
     const collectH = n / Math.max(def.gather ? def.gather.rate * 0.6 : 1, 1e-3);
@@ -121,7 +144,8 @@ function foodChain(s, P, up) {
   if (m.method === 'collect') {
     const gs = gatherStatus(s, m.rid), n = meal / Math.max(m.v, 1);
     if (!gs || !gs.ok || gs.r.amt < n) return null;
-    return { task: gatherTask(s, m.rid, '', { wants: [{ n: KINDS[g.kind].unit === 'ea' ? Math.ceil(n) : Math.round(n * 100) / 100 }] }), prepH: n / Math.max(gs.rate, 1e-3) + prep };
+    const prepH = n / Math.max(gs.rate, 1e-3) + prep, extra = (meal - sitting) / Math.max(m.v, 1);
+    return { task: mealTask(s, m, stages, 0, true, extra, prepH) || gatherTask(s, m.rid, '', { wants: [{ n: KINDS[g.kind].unit === 'ea' ? Math.ceil(n) : Math.round(n * 100) / 100 }] }), prepH };
   }
   for (const rid of (METHOD_RECIPES[m.method] || {})[m.rid] || []) { const t = recipeTask(s, rid, ''); if (t) return { task: t, prepH: t.minutes / 60 + prep }; }
   return null;
@@ -171,7 +195,34 @@ function fireChain(s, P, hours) {
 // sleep) and a chain that makes that possible (prepare a meal, walk to
 // water, light a fire before bed). A step is due when its preparation plus
 // the top task would run past the line; the most overdue comes first.
+// When bed is due, the night is the top task: whatever would cross its line
+// before morning (a meal, a drink) comes first, so you can sleep through.
 function needTasks(s, P, up, top) {
+  const due = bodyNeeds(s, P, up, top, false);
+  const met = top ? top.met : 2.5, mode = top ? top.mode : 'act', topH = top ? top.minutes / 60 : 0.5;
+  const lines = runway(s, { met, mode });
+  const until = (name) => { const l = lines.find((x) => x.name === name); return !l ? Infinity : l.low ? 0 : l.rec ? Infinity : l.h; };
+  const consider = (task, prepH, lineH) => { if (task && isFinite(prepH) && lineH - prepH - topH <= 0) { due.push({ task, slack: lineH - prepH - topH }); return due[due.length - 1]; } return null; };
+  // sleep: by bedtime or when tired, with a fire first if nights here want one
+  const hr = hourOf(s), tBed = hr >= 22 || hr < 5 ? 0 : hr >= 12 ? 22 - hr : Infinity;
+  const tSleep = Math.min(until('Stamina'), tBed);
+  // one chain: the fire for the night (if nights here want one), then sleep;
+  // due when the top task plus all of it would run past bedtime
+  const f = up && up.nightFire && up.fire.mode ? fireChain(s, P, up.sleep.S) : null;
+  const bed = consider(f && f.task ? f.task : SLEEP_TASK, f ? f.prepH : 0, tSleep);
+  if (bed) {
+    const night = Object.assign({}, SLEEP_TASK, { minutes: 60 * (up ? up.sleep.S : 8) });
+    for (const d of bodyNeeds(s, P, up, night, true)) if (!due.some((x) => x.task.key === d.task.key)) due.push({ task: d.task, slack: bed.slack - 0.01 });
+  }
+  // warmth while awake: a fire, if you can make one
+  const tCold = until('Warmth');
+  if (isFinite(tCold) && up && up.fire.mode) { const f = fireChain(s, P, 2); if (f) consider(f.task, f.prepH, tCold); }
+  return due.sort((a, b) => a.slack - b.slack);
+}
+
+// Food and water, against the pace and length of `top`. At night (asleep),
+// water within reach needs nothing: you drink from it in the night.
+function bodyNeeds(s, P, up, top, night) {
   const met = top ? top.met : 2.5, mode = top ? top.mode : 'act', topH = top ? top.minutes / 60 : 0.5;
   const lines = runway(s, { met, mode });
   const until = (name) => { const l = lines.find((x) => x.name === name); return !l ? Infinity : l.low ? 0 : l.rec ? Infinity : l.h; };
@@ -179,34 +230,26 @@ function needTasks(s, P, up, top) {
   const consider = (task, prepH, lineH) => { if (task && isFinite(prepH) && lineH - prepH - topH <= 0) due.push({ task, slack: lineH - prepH - topH }); };
   const burn = 70 * met;
   // food: eat what you hold, keep a meal coming, and find more before it runs out
-  const held = reach(s).filter((x) => edible(x.it)).reduce((a, x) => a + KINDS[x.it.kind].food.kcal * x.it.n, 0);
-  const tHungry = until('Food');
-  if (held > 100 && s.c.stomach < 2000) consider({ key: 'x.eatBest', name: 'Eat', cmd: { t: 'eatBest' }, minutes: 10, met: 1.5, mode: 'rest', note: `${Math.round(held)} kcal within reach` }, 1 / 6, tHungry);
+  const ed = reach(s).filter((x) => edible(x.it));
+  const held = ed.reduce((a, x) => a + KINDS[x.it.kind].food.kcal * x.it.n, 0), portions = ed.reduce((a, x) => a + x.it.n / KINDS[x.it.kind].food.portion, 0);
+  const tHungry = until('Food'), room = FULL - s.c.stomach, eatMin = held ? Math.min(60, Math.max(4, (10 * portions * Math.min(held, room)) / held)) : 0;
+  if (held > 100 && room > 50) consider({ key: 'x.eatBest', name: 'Eat', cmd: { t: 'eatBest' }, minutes: eatMin, met: 1.5, mode: 'rest', note: held > room ? 'until full' : `${Math.round(held)} kcal within reach` }, eatMin / 60, tHungry);
   const fc = foodChain(s, P, up);
   if (fc) consider(fc.task, fc.prepH, tHungry + held / burn);
-  else if (!(up && up.food.mix.some((m) => m.sus))) { const sc = foodScout(s, P, up, burn); if (sc) consider(sc.task, sc.prepH, tHungry + held / burn); }
-  const sc = foodScout(s, P, up, (up ? up.E : 3000) / 24);
+  else if (!night && !(up && up.food.mix.some((m) => m.sus))) { const sc = foodScout(s, P, up, burn); if (sc) consider(sc.task, sc.prepH, tHungry + held / burn); }
+  const sc = night ? null : foodScout(s, P, up, (up ? up.E : 3000) / 24);
   if (sc) consider(sc.task, sc.prepH, sc.lineH);
   // water: drink here, drink what you carry, or get to water in time
   const tThirsty = until('Water'), w = waterHere(s);
   const carried = reach(s).filter((x) => x.it.kind === 'water');
   const litres = carried.reduce((a, x) => a + x.it.n, 0);
+  if (night && litres > 0.3) return due;
   if (s.c.thirst >= 0.1) {
     if (w) consider({ key: 'x.drink', name: 'Drink', cmd: { t: 'drink' }, minutes: 3, met: 1.5, mode: 'rest', note: `purity ${Math.round(w.purity)}` }, 0.05, tThirsty);
     else if (carried.length) consider({ key: 'd.' + carried[0].it.id, name: 'Drink carried water', cmd: { t: 'drinkItem', id: carried[0].it.id }, minutes: 3, met: 1.5, mode: 'rest' }, 0.05, tThirsty);
   }
-  if (!w) { const n = P.node('g.water'); consider(firstTask(s, P, n, ''), hoursOf(n) + 0.05, tThirsty + litres / thirstRate(met, false)); }
-  // sleep: by bedtime or when tired, with a fire first if nights here want one
-  const hr = hourOf(s), tBed = hr >= 22 || hr < 5 ? 0 : hr >= 12 ? 22 - hr : Infinity;
-  const tSleep = Math.min(until('Stamina'), tBed);
-  // one chain: the fire for the night (if nights here want one), then sleep;
-  // due when the top task plus all of it would run past bedtime
-  const f = up && up.nightFire && up.fire.mode ? fireChain(s, P, up.sleep.S) : null;
-  consider(f && f.task ? f.task : SLEEP_TASK, f ? f.prepH : 0, tSleep);
-  // warmth while awake: a fire, if you can make one
-  const tCold = until('Warmth');
-  if (isFinite(tCold) && up && up.fire.mode) { const f = fireChain(s, P, 2); if (f) consider(f.task, f.prepH, tCold); }
-  return due.sort((a, b) => a.slack - b.slack);
+  if (!w) { const n = P.node('g.water'); consider(firstTask(s, P, n, ''), hoursOf(n) + 0.05, tThirsty + litres / thirstRate(met, false, mode === 'sleep')); }
+  return due;
 }
 
 // sel: null, or a project row. up: the current upkeep (econ.upkeep).
@@ -224,7 +267,10 @@ export function taskList(s, P, sel, up) {
   for (const it of L.items) if (it.proj) push({ key: 'w.' + it.id, name: `Keep working: ${it.proj.name}`, cmd: { t: 'work', id: it.id }, minutes: Math.min(120, it.proj.left), met: RECIPES[it.proj.rid].met, mode: 'act', note: `${fmtTime(it.proj.left)} left` });
   if (trapsHere(s).length) push({ key: 'traps', name: `Check ${trapsHere(s).length} trap${trapsHere(s).length > 1 ? 's' : ''}`, cmd: { t: 'checkTraps' }, minutes: 10 + 3 * trapsHere(s).length, met: 3, mode: 'act' });
   push(drinkTask());
-  for (const { it } of reach(s)) if (edible(it) && s.c.stomach < 2000) push({ key: 'e.' + it.kind, name: `Eat ${kindOf(it).name}`, cmd: { t: 'eat', id: it.id }, minutes: 10, met: 1.5, mode: 'rest', note: `${Math.round(kindOf(it).food.kcal * Math.min(it.n, kindOf(it).food.portion))} kcal` });
+  for (const { it } of reach(s)) if (edible(it) && s.c.stomach < FULL - 50) {
+    const f = kindOf(it).food, n = Math.min(it.n, (FULL - s.c.stomach) / f.kcal);
+    push({ key: 'e.' + it.kind, name: `Eat ${kindOf(it).name}`, cmd: { t: 'eat', id: it.id }, minutes: Math.min(60, Math.max(4, (10 * n) / f.portion)), met: 1.5, mode: 'rest', note: n < it.n - 1e-6 ? 'until full' : `${Math.round(f.kcal * n)} kcal` });
+  }
   for (const { it } of reach(s)) { const c = contSpec(it); if (c && c.liquid && waterHere(s)) push({ key: 'f.' + it.id, name: `Fill the ${kindOf(it).name}`, cmd: { t: 'fill', id: it.id }, minutes: 5, met: 2.5, mode: 'act' }); }
   // food that keeps, lying in the open: put it under cover (a cool pit first)
   const store = L.items.filter((it) => contSpec(it) && !contSpec(it).liquid && kindOf(it).fixed).sort((a, b) => (contSpec(b).cool ? 1 : 0) - (contSpec(a).cool ? 1 : 0));
@@ -270,7 +316,7 @@ export function runway(s, task) {
   if (E > L.food.ok) lines.push({ name: 'Food', frac: E / L.food.full, tfrac: L.food.ok / L.food.full, h: (E - L.food.ok) / burn, word: 'until hungry' });
   else if (E > 0) lines.push({ name: 'Food', frac: E / L.food.full, tfrac: L.food.ok / L.food.full, low: true, h: E / burn, word: 'hungry · until weak' });
   else lines.push({ name: 'Food', frac: 0, tfrac: L.food.ok / L.food.full, low: true, h: c.fat / burn, word: 'weak · living on fat' });
-  const tr = thirstRate(met, sick);
+  const tr = thirstRate(met, sick, mode === 'sleep');
   const wf = (x) => 1 - x / L.water.harm;
   lines.push(c.thirst < L.water.ok
     ? { name: 'Water', frac: wf(c.thirst), tfrac: wf(L.water.ok), h: (L.water.ok - c.thirst) / tr, word: 'until thirsty' }

@@ -112,6 +112,30 @@ now, what is on the ground, and your two hands.
   The test is the top task plus *every* remaining step of the chain (a step
   that cannot be done yet counts its own preparation, such as relighting a
   fire); only the next step is pushed up, one at a time.
+- **A meal is one task.** When the cheapest food is collected here,
+  collecting, each stage (shell, pound, roast) and eating are one tap
+  ("Collect, shell and eat nuts"), picking up from whatever stage you
+  already hold. It runs until your stomach is full (about 2,000 kcal),
+  collecting a full sitting's worth plus the share the year's plan puts by,
+  and processing only what this sitting needs. It stops by itself at a
+  stage that leaves the food alone (leaching, drying: "Collect, shell and
+  leach acorns, then 12 h to leach"), or when the next stage lacks
+  something (the fire is out), and the chain then pushes that step up.
+  Every eating action goes on to full; a portion takes ten minutes, and
+  each portion is its own chance of a bad one.
+- **The night is a task too.** Once bed is due, food and water are
+  checked again against the night (its length from the upkeep's sleep, at
+  sleeping pace): whatever would cross its line before morning comes
+  first, meal, then drink, then the night's fire, then sleep. Asleep, the
+  body holds water back (antidiuretic hormone rises at night and urine
+  output roughly halves; `NIGHT_WATER` = 0.6), so a night costs about
+  0.5 L. If you do get thirsty in the night: with water within reach (a
+  filled container) you drink from it without really waking; with water at
+  this place you get up, walk over and drink (ten minutes, at the night's
+  temperature); with neither, thirst wakes you for good at 2.5 L. Brief
+  wakings do not lower sleep quality, since several a night are normal;
+  their cost is the time up and the cold. The upkeep forecast leaves these
+  wakings out: after a drink at bedtime they almost never happen.
 - **Finishing the selected project** (the technique succeeds, or one
   collecting trip for a collecting project) closes it, or, if you reached
   it through a requirement link, goes back up to the project it was a step
@@ -131,7 +155,8 @@ now, what is on the ground, and your two hands.
   | Chill | 30 | 70 | +30% time, injury ×1.5 |
 
   Water loss is 0.1 L/h at rest plus 0.12 L/h per unit of metabolic rate
-  above rest, so a few hours of work without drinking makes you thirsty.
+  above rest (×0.6 asleep), so a few hours of work without drinking makes
+  you thirsty.
   The thresholds sit near where measurable impairment is reported (about
   1.5–2% of body mass for water), but every number here is a judgment
   call, not a sourced value.
