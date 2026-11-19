@@ -450,10 +450,7 @@ function needLines(need, up) {
 
 function selectedCard(P, sel, up) {
   let title, meta, lines = '';
-  if (sel.need) {
-    title = NEED_NAMES[sel.need]; meta = `${hrs(up.parts[sel.need])} h a day`;
-    lines = '<ul class="reqs">' + needLines(sel.need, up).map((l) => `<li>${esc(l)}</li>`).join('') + '</ul>';
-  } else {
+  {
     title = (sel.goal ? '★ ' : '') + sel.name;
     meta = sel.prog ? `${fmtTime(sel.needs)} left` : `needs ${hrs(sel.needs / 60)} h${sel.saves > 0.05 ? ` · saves ${hrs(sel.saves)} h/day · ${days(sel.horizon)}` : ''}`;
     const n = sel.node;
@@ -468,24 +465,23 @@ function selectedCard(P, sel, up) {
     }
   }
   const back = ui.projBack.length ? uibtn('‹', 'projBack', { cls: 'quiet small-btn' }) : '';
-  return `<div class="selcard"><div class="selhead">${back}<div class="seltitle"><span class="item-name">${esc(title)}</span><span class="chip ${sel.ready || sel.need ? 'cap' : 'warm'}">${meta}</span></div>
+  return `<div class="selcard"><div class="selhead">${back}<div class="seltitle"><span class="item-name">${esc(title)}</span><span class="chip ${sel.ready ? 'cap' : 'warm'}">${meta}</span></div>
     ${uibtn('×', 'projClear', { cls: 'quiet small-btn' })}</div>${lines}</div>`;
 }
 
 function projectsPane(P, ec, sel) {
   const up = ec.base;
-  let list = ec.rows.filter((r) => !sel || r.key !== sel.key);
-  if (sel && sel.need) list = list.filter((r) => r.by[sel.need] > 0.05).sort((a, b) => b.by[sel.need] - a.by[sel.need] || a.needs - b.needs);
-  else list.sort(SORTS[ui.sort]);
+  const list = ec.rows.filter((r) => !sel || r.key !== sel.key).sort(SORTS[ui.sort]);
   const rows = list.map((r) => {
     const sub = tagsOf(r).concat(r.wait > 60 ? [`+${fmtTime(r.wait)} waiting`] : []).join(' · ');
     return `<li><button class="row proj ${r.ready ? 'ready' : ''} ${r.goal ? 'goal' : ''}" data-ui="proj:${r.key}"><span class="row-name">${r.goal ? '★ ' : ''}${esc(r.name)}${sub ? `<small>${esc(sub)}</small>` : ''}</span>`
       + `<span class="num">${r.prog ? '<i>…</i>' : ''}${hrs(r.needs / 60)}</span><span class="num">${hrs(r.saves)}</span><span class="num">${days(r.horizon)}</span></button></li>`;
   }).join('') || '<li class="muted small">Nothing you know how to make would change this here.</li>';
-  const col = (k, label) => `<button class="num ${ui.sort === k && !(sel && sel.need) ? 'on' : ''}" data-ui="sort:${k}" title="sort by ${k}">${label}</button>`;
-  const needs = NEEDS.map((k) => `<button class="need ${sel && sel.need === k ? 'on' : ''}" data-ui="proj:need:${k}"><span>${NEED_NAMES[k]}</span><b>${hrs(up.parts[k])}</b></button>`).join('');
+  const col = (k, label) => `<button class="num ${ui.sort === k ? 'on' : ''}" data-ui="sort:${k}" title="sort by ${k}">${label}</button>`;
+  // the parts of upkeep, for the curious: read-only, behind a tap
+  const parts = ui.upkeep ? `<ul class="upkeep-parts">${NEEDS.map((k) => `<li><b>${NEED_NAMES[k]} ${hrs(up.parts[k])} h</b> ${needLines(k, up).map(esc).join(' ')}</li>`).join('')}</ul>` : '';
   return `<section class="pane projects" aria-label="Projects">
-    <div class="upkeep"><h2 class="pane-h">Upkeep <b>${hrs(up.U)} h a day</b><small>${isFinite(up.U) && up.U < 24 ? `${hrs(24 - up.U)} h free` : 'more than a day'}</small></h2><div class="needs">${needs}</div></div>
+    <div class="upkeep"><button class="pane-h upkeep-h" data-ui="upkeep" aria-expanded="${!!ui.upkeep}"><span>Upkeep <b>${hrs(up.U)} h a day</b></span><small>${isFinite(up.U) && up.U < 24 ? `${hrs(24 - up.U)} h free` : 'more than a day'} ${ui.upkeep ? '▴' : '▾'}</small></button>${parts}</div>
     ${sel ? selectedCard(P, sel, up) : ''}
     <div class="cols"><span>Project</span>${col('needs', 'needs h')}${col('saves', 'saves h/d')}${col('horizon', 'pays in')}</div>
     <ul class="rows" id="proj-list" data-keep-scroll>${rows}</ul></section>`;
@@ -615,9 +611,8 @@ function render() {
     return;
   }
   const { P, ec } = econNow();
-  let sel = null;
-  if (S.project && S.project.startsWith('need:')) sel = { need: S.project.slice(5) };
-  else if (S.project) sel = ec.rows.find((r) => r.key === S.project) || null;
+  if (S.project && S.project.startsWith('need:')) S.project = null; // need buttons are gone
+  const sel = S.project ? ec.rows.find((r) => r.key === S.project) || null : null;
   if (S.project && !sel) S.project = null;
   const tasks = taskList(S, P, sel, ec.base);
   // pace the forecast on the first task that takes real time, not on a 3-minute drink
@@ -692,6 +687,7 @@ function uiAction(a, el) {
   else if (k === 'menu') ui.menu = !ui.menu;
   else if (k === 'theme') { ui.theme = { auto: 'light', light: 'dark', dark: 'auto' }[ui.theme]; applyTheme(); }
   else if (k === 'vitals') ui.vitals = !ui.vitals;
+  else if (k === 'upkeep') ui.upkeep = !ui.upkeep;
   else if (k === 'inv') ui.inv = !ui.inv;
   else if (k === 'collapse') ui.collapsed[v] = !ui.collapsed[v];
   else if (k === 'view') ui.view = v;
@@ -755,7 +751,7 @@ export function boot(saved) {
   if (S && S.v !== 1) S = null;
   if (S && !S.goals) S.goals = {};
   if (S) migrate(S);
-  if (S && S.project) S.project = { 'x.eat': 'need:food', 'x.drink': 'need:water', 'x.sleep': 'need:sleep', 'r.add_fuel': 'need:fire' }[S.project] || S.project;
+  if (S && S.project && (/^(x\.|need:)/.test(S.project) || S.project === 'r.add_fuel')) S.project = null; // need selections are gone
   if (S) { ui.choices = S.choices = S.choices || {}; }
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-cmd],[data-ui]');

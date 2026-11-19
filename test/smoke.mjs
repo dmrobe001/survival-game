@@ -62,7 +62,7 @@ check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'stat
   check(bed.parts.sleep < base.parts.sleep && raised.parts.sleep < bed.parts.sleep, 'better bedding should cut sleep in order');
   // nothing is free: a project's saving is never more than the whole upkeep
   check(rows.every((r) => r.saves <= base.U + 1e-9), 'a project cannot save more than the upkeep');
-  for (const sel of [null, ...NEEDS.map((need) => ({ need })), rows[0]]) taskList(s, P, sel, base);
+  for (const sel of [null, rows[0]]) taskList(s, P, sel, base);
   // determinism: evaluating upkeep must not touch the game state
   const before = JSON.stringify(s);
   upkeep(s, ['hearth', 'bark_basin']);

@@ -218,26 +218,27 @@ function foodRoutes(kind, kit, ctx, bitter, depth = 0) {
   if (ctx.fr[mk]) return ctx.fr[mk];
   const k = KINDS[kind], out = [];
   if (depth > 5) return out;
-  const via = (list, y, u, step) => { for (const o of list) out.push({ v: o.v * y, h: o.h * y + u.h, fire: o.fire * y + u.fire, how: step ? [step].concat(o.how) : o.how, kf: o.kf }); };
+  // rids: the recipes of the route, in order (for the task list)
+  const via = (list, y, u, step, rid) => { for (const o of list) out.push({ v: o.v * y, h: o.h * y + u.h, fire: o.fire * y + u.fire, how: step ? [step].concat(o.how) : o.how, kf: o.kf, rids: [rid].concat(o.rids) }); };
   if (k.food) {
     const f = k.food, sick = (f.risk + (bitter ? 0.5 : 0)) / f.portion;
-    out.push({ v: f.kcal * (bitter ? 0.5 : 1), h: TUNE.SICK_HOURS * sick, fire: 0, how: bitter ? ['eaten bitter'] : [], kf: kind });
+    out.push({ v: f.kcal * (bitter ? 0.5 : 1), h: TUNE.SICK_HOURS * sick, fire: 0, how: bitter ? ['eaten bitter'] : [], kf: kind, rids: [] });
   }
   let u;
-  if (k.roast && (u = unitCost('roast_' + kind, kit, ctx))) via(foodRoutes(k.roast.to, kit, ctx, bitter, depth + 1), k.roast.y, u, kind.includes('meal') ? 'baked' : 'roasted');
-  if (k.boil && (u = unitCost('boil_' + kind, kit, ctx))) via(foodRoutes(k.boil.to, kit, ctx, bitter, depth + 1), k.boil.y, u, 'boiled');
+  if (k.roast && (u = unitCost('roast_' + kind, kit, ctx))) via(foodRoutes(k.roast.to, kit, ctx, bitter, depth + 1), k.roast.y, u, kind.includes('meal') ? 'baked' : 'roasted', 'roast_' + kind);
+  if (k.boil && (u = unitCost('boil_' + kind, kit, ctx))) via(foodRoutes(k.boil.to, kit, ctx, bitter, depth + 1), k.boil.y, u, 'boiled', 'boil_' + kind);
   if (k.crush && kit.lvl(k.crush.cap) >= k.crush.min && (u = unitCost('crush_' + kind, kit, ctx))) {
     const tannin = (k.crush.q && k.crush.q.tannin) ?? KINDS[k.crush.to].q.tannin ?? 0;
-    via(foodRoutes(k.crush.to, kit, ctx, tannin > 25, depth + 1), k.crush.y, u, k.crush.cap === 'grind' ? 'ground' : 'shelled and pounded');
+    via(foodRoutes(k.crush.to, kit, ctx, tannin > 25, depth + 1), k.crush.y, u, k.crush.cap === 'grind' ? 'ground' : 'shelled and pounded', 'crush_' + kind);
   }
-  if (k.soak && bitter && (u = unitCost('soak_' + kind, kit, ctx))) via(foodRoutes(kind, kit, ctx, false, depth + 1), 1, u, 'leached');
-  if (k.dry && !bitter && (u = unitCost('dry_' + kind, kit, ctx))) via(foodRoutes(k.dry.to, kit, ctx, false, depth + 1), k.dry.y, u, 'dried');
+  if (k.soak && bitter && (u = unitCost('soak_' + kind, kit, ctx))) via(foodRoutes(kind, kit, ctx, false, depth + 1), 1, u, 'leached', 'soak_' + kind);
+  if (k.dry && !bitter && (u = unitCost('dry_' + kind, kit, ctx))) via(foodRoutes(k.dry.to, kit, ctx, false, depth + 1), k.dry.y, u, 'dried', 'dry_' + kind);
   if (k.butcher && kit.lvl('cut') >= k.butcher.cut) {
     // A carcass is a lump: what you cannot eat before it spoils is lost,
     // unless it is dried or kept cool.
     const cool = kit.has((it) => { const c = contSpec(it); return c && c.cool; });
     let v = 0, h = (k.butcher.time / 60) * (1 + wearPerHour(kit, 'cut', ctx.price)), fire = 0;
-    const how = [];
+    const how = [], rids = ['butcher_' + kind];
     for (const [o, n] of k.butcher.out) {
       if (!KINDS[o].food) continue;
       const b = pick(foodRoutes(o, kit, ctx, false, depth + 1), 0, ctx.c);
@@ -246,10 +247,10 @@ function foodRoutes(kind, kit, ctx, bitter, depth = 0) {
       const shelf = (75 / rot) * (cool ? 2.5 : 1); // days until it is no longer safe
       const use = Math.min(1, (ctx.E * shelf) / (n * b.v));
       v += n * b.v * use; h += n * b.h * use; fire += n * b.fire * use;
-      if (KINDS[o].food.kcal > 800) how.push(...b.how.filter((x) => !how.includes(x)));
+      if (KINDS[o].food.kcal > 800) { how.push(...b.how.filter((x) => !how.includes(x))); if (rids.length === 1) rids.push(...b.rids); }
       if (use < 0.95 && o !== 'fat') how.push(`${Math.round((1 - use) * 100)}% spoils`);
     }
-    if (v > 0) out.push({ v, h, fire, how: ['butchered'].concat(how), kf: null });
+    if (v > 0) out.push({ v, h, fire, how: ['butchered'].concat(how), kf: null, rids });
   }
   return (ctx.fr[mk] = out);
 }
@@ -311,15 +312,15 @@ function foodSupply(kit, ctx, E) {
       for (const m of ms) {
         const unitH = m.unitH(t.x);
         if (!isFinite(unitH)) continue;
-        let v = 0, h = 0, fire = 0, how = null;
+        let v = 0, h = 0, fire = 0, how = null, rids = null;
         for (const [kind, w] of m.kinds) {
           const b = pick(foodRoutes(kind, kit, ctx, bitterOf(kind)), unitH, ctx.c);
           if (!b) { v = 0; break; }
-          v += w * b.v; h += w * b.h; fire += w * b.fire; how = how || b.how;
+          v += w * b.v; h += w * b.h; fire += w * b.fire; how = how || b.how; rids = rids || b.rids;
         }
         if (v <= 0) continue;
         const sel = (unitH + h + fire * ctx.c) / v;
-        if (!top || sel < top.sel) top = { rid, method: m.name, sel, lab: (unitH + h) / v, fire: fire / v, n: t.n * v, sus: t.sus, how };
+        if (!top || sel < top.sel) top = { rid, method: m.name, sel, lab: (unitH + h) / v, fire: fire / v, n: t.n * v, sus: t.sus, how, rids, v };
       }
       if (top) offers.push(top);
     }
@@ -339,7 +340,7 @@ function fillFood(offers, E, c) {
     left -= take; hours += take * o.lab; fire += take * o.fire;
     if (!o.sus) { if (!short) hours += TUNE.COMMUTE; short += take; }
     const prev = mix.find((m) => m.rid === o.rid && m.method === o.method && m.sus === o.sus);
-    if (prev) { prev.kcal += take; prev.hours += take * o.lab; } else mix.push({ rid: o.rid, method: o.method, how: o.how, kcal: take, hours: take * o.lab, sus: o.sus });
+    if (prev) { prev.kcal += take; prev.hours += take * o.lab; } else mix.push({ rid: o.rid, method: o.method, how: o.how, rids: o.rids, v: o.v, kcal: take, hours: take * o.lab, sus: o.sus });
   }
   if (left > 1e-6) hours = Infinity;
   return { hours, fire, short, mix, unmet: left > 1e-6 ? left : 0, cost: hours + fire * c };
@@ -521,8 +522,22 @@ export function upkeep(s, extraKinds = [], baseItems = null) {
     const fireH = F > 0 ? f.hours + lightH * (mode === 'light' ? 1 : 0) : 0;
     const parts = { sleep: sl.S + TUNE.HARM_HOURS * sl.harm, food: food.hours, water: water.h, fire: fireH, repairs: rep.h };
     const U = NEEDS.reduce((a, k) => a + parts[k], 0);
-    if (!best || U < best.U) best = { U, parts, nightFire, sleep: sl, E: ctx.E, W, food, water, fire: { F, mode, burn, short: f.short, light: lightH }, repairs: rep, price: sw.price };
+    if (!best || U < best.U) best = { ctxC: ctx.c, U, parts, nightFire, sleep: sl, E: ctx.E, W, food, water, fire: { F, mode, burn, short: f.short, light: lightH }, repairs: rep, price: sw.price };
   }
+  // Foods worth looking for elsewhere, with what you have: kcal per hour of
+  // collecting and preparing, at a typical place that has them.
+  ctx.c = best.ctxC; ctx.uc = {}; ctx.fr = {};
+  best.foodRank = [];
+  for (const rid in RESOURCES) {
+    const def = RESOURCES[rid], g = def.gather;
+    if (!g || !def.find || (g.tool && kit.lvl(g.tool.cap) < g.tool.min)) continue;
+    const k = KINDS[g.kind];
+    if (!(k.food || k.crush || k.roast)) continue;
+    const rate = gatherRate(kit, rid, 0.6, { cap: def.cap });
+    const b = rate > 0 && pick(foodRoutes(g.kind, kit, ctx, bitterOf(g.kind)), 1 / rate, ctx.c);
+    if (b) best.foodRank.push({ rid, kcalh: b.v / (1 / rate + b.h) });
+  }
+  best.foodRank.sort((a, b) => b.kcalh - a.kcalh);
   return best;
 }
 

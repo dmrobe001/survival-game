@@ -322,7 +322,7 @@ export function makePlanner(s, extra = null) {
     const g = RESOURCES[src.rid].gather, key = whereKey(src.rid, src.w);
     if (src.why) why[key] = src.why;
     if (g.tool) needCap(g.tool.cap, g.tool.min, key);
-    add({ key, minutes: src.w.m + src.collect, wait: 0, times: 1, wants: [want] }, forKey);
+    add({ key, minutes: src.w.m + src.collect, wait: 0, times: 1, wants: [want], why: src.why || '' }, forKey);
     return key;
   }
 
@@ -336,6 +336,7 @@ export function makePlanner(s, extra = null) {
       if (e) {
         e.minutes += step.minutes; e.times += step.times;
         if (step.wants) e.wants = (e.wants || []).concat(step.wants); // e.g. one strong pole for the ridge, two of any for uprights
+        if (!e.why && step.why) e.why = step.why;
       } else { e = byKey[step.key] = Object.assign({ for: [] }, step); steps.push(e); }
       if (forKey && forKey !== e.key && !e.for.includes(forKey)) e.for.push(forKey);
       return e.key;

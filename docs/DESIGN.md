@@ -79,9 +79,9 @@ Top to bottom: the reserve that runs out first, projects, tasks you can do
 now, what is on the ground, and your two hands.
 
 - **Upkeep** heads the projects panel: the hours a day that staying alive
-  here costs, split into sleep, food, water, fire and repairs (see
-  *Upkeep* below). Tap a need to see what its hours are made of; the
-  projects then sort by how much they cut that need.
+  here costs (see *Upkeep* below). The total is the target; tap it to see
+  what its parts (sleep, food, water, fire, repairs) are made of. There is
+  no choosing a need to work on: projects are ranked on the total.
 - **Projects** are techniques, and collecting things that work as tools
   (a cobble is a hammerstone), shown with three numbers: *needs*, the hours
   of work to do it once by its planned route from where you stand; *saves*,
@@ -95,6 +95,20 @@ now, what is on the ground, and your two hands.
   project's route come first, in route order. A collecting step that has
   to turn up a good-enough piece says how often one does ("about 47% of
   the cobbles here will do for a hammer (35+)").
+- **Needs push in when they must.** Each need has a step that meets it
+  (eat, drink, sleep) and a chain that makes the step possible: the next
+  step toward a meal by the upkeep evaluator's cheapest food (collect, then
+  each recipe of its route, with waits such as leaching overnight, picking
+  up where you are), walking or exploring to water, a fire before bed when
+  nights here are cheaper by one, a fire when cold sets in. A step is due
+  when its preparation plus the top task would carry you past that need's
+  comfort line (the tick on the status bar); due steps go above the top
+  task, most overdue first, unlabelled. Food and water you carry count as
+  time in hand, but the meal chain still starts in time not to depend on
+  them. When the food you can use here would run out within about half a
+  day of the time it takes to find more, walking to or exploring for the
+  best foods you could use (ranked by kcal per hour with what you have)
+  comes up too. Bedtime is 22:00, or sooner if you tire.
 - **Finishing the selected project** (the technique succeeds, or one
   collecting trip for a collecting project) closes it, or, if you reached
   it through a requirement link, goes back up to the project it was a step
