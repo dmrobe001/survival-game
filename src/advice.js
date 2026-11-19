@@ -5,7 +5,7 @@
 import { KINDS } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
 import { RECIPES } from './data/recipes.js';
-import { kindOf, here, reach, contSpec } from './items.js';
+import { kindOf, here, reach, contSpec, whyNotHold } from './items.js';
 import { recipeStatus, gatherStatus, waterHere, travelInfo, trapsHere, reqText } from './actions.js';
 import { feltTemp, raining, LIMITS, thirstRate, hourOf } from './sim.js';
 import { fmt, fmtTime } from './util.js';
@@ -76,7 +76,9 @@ function foodChain(s, P, up) {
   const m = mix.find((x) => !x.at) || mix[0]; // what is here first; else the place you would fetch it from
   if (!m) return null;
   const def = RESOURCES[m.rid], g = def.gather;
-  let units = MEAL / Math.max(m.v, 1), bitter = g ? (KINDS[g.kind].q.tannin || 0) > 25 : false;
+  // when the year's plan puts this food by, each meal's collecting takes a share for later too
+  const meal = MEAL + (up.year && up.year.putRids.includes(m.rid) ? up.year.putByToday / 2 : 0);
+  let units = meal / Math.max(m.v, 1), bitter = g ? (KINDS[g.kind].q.tannin || 0) > 25 : false;
   // the stages: what each recipe needs going in, and how long it takes
   const stages = [];
   for (const rid of m.rids || []) {
@@ -104,13 +106,13 @@ function foodChain(s, P, up) {
   // nothing in hand yet: collect a meal's worth (going there first, if it is elsewhere)
   const prep = stages.reduce((a, x) => a + x.h, 0) + 1 / 6;
   if (m.at) {
-    const info = travelInfo(s, m.at), n = MEAL / Math.max(m.v, 1);
+    const info = travelInfo(s, m.at), n = meal / Math.max(m.v, 1);
     const collectH = n / Math.max(def.gather ? def.gather.rate * 0.6 : 1, 1e-3);
     return { task: { key: 'go.' + m.at, name: `Walk to ${s.locs[m.at].name.toLowerCase()}`, cmd: { t: 'travel', to: m.at }, minutes: info.minutes, met: info.met, mode: 'travel', note: `${fmt(info.km)} km` },
       prepH: (2 * info.minutes) / 60 + collectH + prep };
   }
   if (m.method === 'collect') {
-    const gs = gatherStatus(s, m.rid), n = MEAL / Math.max(m.v, 1);
+    const gs = gatherStatus(s, m.rid), n = meal / Math.max(m.v, 1);
     if (!gs || !gs.ok || gs.r.amt < n) return null;
     return { task: gatherTask(s, m.rid, '', { wants: [{ n: KINDS[g.kind].unit === 'ea' ? Math.ceil(n) : Math.round(n * 100) / 100 }] }), prepH: n / Math.max(gs.rate, 1e-3) + prep };
   }
@@ -217,6 +219,14 @@ export function taskList(s, P, sel, up) {
   push(drinkTask());
   for (const { it } of reach(s)) if (edible(it) && s.c.stomach < 2000) push({ key: 'e.' + it.kind, name: `Eat ${kindOf(it).name}`, cmd: { t: 'eat', id: it.id }, minutes: 10, met: 1.5, mode: 'rest', note: `${Math.round(kindOf(it).food.kcal * Math.min(it.n, kindOf(it).food.portion))} kcal` });
   for (const { it } of reach(s)) { const c = contSpec(it); if (c && c.liquid && waterHere(s)) push({ key: 'f.' + it.id, name: `Fill the ${kindOf(it).name}`, cmd: { t: 'fill', id: it.id }, minutes: 5, met: 2.5, mode: 'act' }); }
+  // food that keeps, lying in the open: put it under cover (a cool pit first)
+  const store = L.items.filter((it) => contSpec(it) && !contSpec(it).liquid && kindOf(it).fixed).sort((a, b) => (contSpec(b).cool ? 1 : 0) - (contSpec(a).cool ? 1 : 0));
+  for (const it of L.items) {
+    const k = kindOf(it), rot = (k.decay || {}).fresh;
+    if (!(k.food || k.crush) || !rot || rot > 2.5 || it.proc) continue;
+    const box = store.find((c) => !whyNotHold(c, it, Math.min(it.n, 0.1)));
+    if (box) push({ key: 'st.' + it.id, name: `Store the ${k.name} in the ${kindOf(box).name}`, cmd: { t: 'move', id: it.id, to: box.id }, minutes: 2, met: 2, mode: 'act', note: 'keeps far longer' });
+  }
   for (const rid in L.res) push(gatherTask(s, rid, ''));
   const ready = Object.keys(RECIPES).map((rid) => recipeTask(s, rid, '')).filter(Boolean).sort((a, b) => a.minutes - b.minutes);
   for (const t of ready) push(t);

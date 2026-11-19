@@ -10,6 +10,7 @@ import { makePlanner } from '../src/plan.js';
 import { taskList } from '../src/advice.js';
 import { upkeep, projectRows, NEEDS } from '../src/econ.js';
 import { tiersOf, passRate, tierKey } from '../src/tiers.js';
+import { typicalState } from '../tools/benchmarks.mjs';
 import { canMerge, capOf, mk, setPieces } from '../src/items.js';
 
 let failures = 0;
@@ -112,6 +113,16 @@ check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'stat
   const u0 = upkeep(s4, ['cobble']), u1 = upkeep(s4, ['cobble', 'pack_basket']);
   check(u0.food.mix.some((m) => m.at === 'L99'), 'food should be fetched from the known place 1.5 km away');
   check(u1.parts.food < u0.parts.food, `a pack basket should make fetching food cheaper (${u0.parts.food.toFixed(2)} -> ${u1.parts.food.toFixed(2)} h)`);
+}
+
+// --- the year: autumn food is put by for winter, and storing never makes the year worse
+{
+  const camp = ['cobble', 'flake', 'stalk', 'hearth_board', 'bed', 'debris_hut'];
+  const plain = upkeep(typicalState('woodland', camp, 270)), pit = upkeep(typicalState('woodland', camp.concat(['storage_pit']), 270));
+  check(pit.year.putByToday > 100, 'in autumn the plan should put food by for later: ' + Math.round(pit.year.putByToday));
+  check(pit.U <= plain.U + 1e-6, `a storage pit should not make the year worse (${plain.U.toFixed(2)} -> ${pit.U.toFixed(2)})`);
+  check(pit.year.seasons.every((x) => x.short < 1), 'with a camp in woodland no stretch of the year should go hungry');
+  check(plain.year.seasons.length === 4 && plain.year.seasons.every((x) => x.days > 0), 'the year is four stretches');
 }
 
 // --- a greedy bot: tries to stay alive and make everything it can

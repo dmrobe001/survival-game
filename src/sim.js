@@ -8,6 +8,7 @@
 // the snare still catches, and the catch still spoils.
 
 import { clamp, rand, pick } from './util.js';
+import { dayOfYear, seasonalT, daylight, monthOf, MONTH_DAYS } from './calendar.js';
 import { KINDS } from './data/items.js';
 import { RESOURCES } from './data/resources.js';
 import { kindOf, capOf, contSpec, mk, here, itemName, wornIn, setPieces, addTo } from './items.js';
@@ -20,7 +21,7 @@ export function say(s, msg, cls = '') {
 
 export const hourOf = (s) => (s.t / 60) % 24;
 export const dayOf = (s) => Math.floor(s.t / 1440) + 1;
-export const isDark = (s) => { const h = hourOf(s); return h < 5 || h >= 21; };
+export const isDark = (s) => { const h = hourOf(s), dl = daylight(dayOfYear(s)); return h < 13 - dl / 2 || h >= 13 + dl / 2; };
 export const raining = (s) => s.weather.kind === 'rain' || s.weather.kind === 'storm';
 
 // ---- weather: a small Markov chain over spells of a few hours
@@ -44,7 +45,7 @@ function tickWeather(s) {
 // ---- temperature
 export function airTemp(s) {
   const e = here(s).env;
-  return 17 - 9 * e.elev + 6 * Math.cos((2 * Math.PI * (hourOf(s) - 15)) / 24) + s.weather.dT;
+  return 17 - 9 * e.elev + seasonalT(dayOfYear(s)) + 6 * Math.cos((2 * Math.PI * (hourOf(s) - 15)) / 24) + s.weather.dT;
 }
 
 function siteLevel(loc, cap) {
@@ -286,7 +287,11 @@ function tickWorld(s, h) {
     const loc = s.locs[id];
     for (const rid in loc.res) {
       const r = loc.res[rid], def = RESOURCES[rid];
-      if (def.regen && r.amt < r.cap) r.amt = Math.min(r.cap, r.amt + def.regen * (h / 24) * (r.amt + 0.03 * r.cap) * (1 - r.amt / r.cap) * 4);
+      if (def.season) {
+        // seasonal: produced in its months, eaten by animals and rotting all year
+        const m = monthOf(dayOfYear(s));
+        r.amt = Math.max(0, Math.min(r.cap * 1.5, r.amt + ((def.find.perYear * r.cap * def.season.grow[m]) / MONTH_DAYS[m] - def.season.loss * r.amt) * (h / 24)));
+      } else if (def.regen && r.amt < r.cap) r.amt = Math.min(r.cap, r.amt + def.regen * (h / 24) * (r.amt + 0.03 * r.cap) * (1 - r.amt / r.cap) * 4);
     }
     if (!loc.items.length && !(loc.trash && loc.trash.length)) continue;
     const roofed = siteLevel(loc, 'roof') >= 40;

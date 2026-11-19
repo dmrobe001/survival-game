@@ -419,7 +419,7 @@ function statusBar(lines, top) {
 // ------------------------------------------------------------------ projects and upkeep
 const hrs = (h) => (!isFinite(h) ? '∞' : h < 0.05 ? '0' : h < 9.95 ? fmt(Math.round(h * 10) / 10) : String(Math.round(h)));
 const days = (d) => (!isFinite(d) ? '—' : d < 0.05 ? 'now' : d < 9.95 ? `${fmt(Math.round(d * 10) / 10)} d` : `${Math.round(d)} d`);
-const NEED_NAMES = { sleep: 'Sleep', food: 'Food', water: 'Water', fire: 'Fire', repairs: 'Repairs' };
+const NEED_NAMES = { sleep: 'Sleep', food: 'Food', water: 'Water', fire: 'Fire', cold: 'Cold', repairs: 'Repairs' };
 const resName = (rid) => (RESOURCES[rid].gather ? KINDS[RESOURCES[rid].gather.kind].name : RESOURCES[rid].name.toLowerCase());
 
 // What one need's hours are made of, in a few short lines.
@@ -444,6 +444,7 @@ function needLines(need, up) {
     else L.push(`${hrs(f.F)} h of fire a day${up.nightFire ? ', mostly through the night' : ', for cooking and boiling'}${f.mode === 'keep' ? ', never let out (nothing to relight it with)' : f.light ? `; lighting it takes ~${hrs(f.light)} h` : ''}.`);
     if (f.short) L.push('Some of the wood comes from further afield and has to be carried back.');
   }
+  if (need === 'cold' && up.parts.cold > 0.05) L.push('Work goes slower when you are chilled, most of all in the cold months.');
   if (need === 'repairs') for (const x of up.repairs.list) L.push(`${KINDS[x.kind].name} · ${fmt(Math.round(x.h * 100) / 100)} h a day`);
   return L;
 }
@@ -479,9 +480,11 @@ function projectsPane(P, ec, sel) {
   }).join('') || '<li class="muted small">Nothing you know how to make would change this here.</li>';
   const col = (k, label) => `<button class="num ${ui.sort === k ? 'on' : ''}" data-ui="sort:${k}" title="sort by ${k}">${label}</button>`;
   // the parts of upkeep, for the curious: read-only, behind a tap
-  const parts = ui.upkeep ? `<ul class="upkeep-parts">${NEEDS.map((k) => `<li><b>${NEED_NAMES[k]} ${hrs(up.parts[k])} h</b> ${needLines(k, up).map(esc).join(' ')}</li>`).join('')}</ul>` : '';
+  const yr = up.year, hard = yr ? yr.worst.U : up.U;
+  const yearLine = yr ? `<li>Averaged over the coming year; the hardest stretch takes ${hrs(hard)} h a day${hard > 24 ? ', more than a day holds: as things stand you will not get through it' : ''}.${yr.putByToday > 30 ? ` Putting by about ${Math.round(yr.putByToday)} kcal a day of ${yr.putRids.map((r) => resName(r)).join(' and ')} for leaner times.` : ''}</li>` : '';
+  const parts = ui.upkeep ? `<ul class="upkeep-parts">${yearLine}${NEEDS.map((k) => `<li><b>${NEED_NAMES[k]} ${hrs(up.parts[k])} h</b> ${needLines(k, up).map(esc).join(' ')}</li>`).join('')}</ul>` : '';
   return `<section class="pane projects" aria-label="Projects">
-    <div class="upkeep"><button class="pane-h upkeep-h" data-ui="upkeep" aria-expanded="${!!ui.upkeep}"><span>Upkeep <b>${hrs(up.U)} h a day</b></span><small>${isFinite(up.U) && up.U < 24 ? `${hrs(24 - up.U)} h free` : 'more than a day'} ${ui.upkeep ? '▴' : '▾'}</small></button>${parts}</div>
+    <div class="upkeep"><button class="pane-h upkeep-h" data-ui="upkeep" aria-expanded="${!!ui.upkeep}"><span>Upkeep <b>${hrs(up.U)} h a day</b></span><small>${hard > 24 ? 'lean months out of reach' : isFinite(up.U) && up.U < 24 ? `${hrs(24 - up.U)} h free` : 'more than a day'} ${ui.upkeep ? '▴' : '▾'}</small></button>${parts}</div>
     ${sel ? selectedCard(P, sel, up) : ''}
     <div class="cols"><span>Project</span>${col('needs', 'needs h')}${col('saves', 'saves h/d')}${col('horizon', 'pays in')}</div>
     <ul class="rows" id="proj-list" data-keep-scroll>${rows}</ul></section>`;

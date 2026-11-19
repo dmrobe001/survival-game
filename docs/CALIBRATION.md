@@ -22,14 +22,14 @@ Collecting rate = a·D / (1 + a·D·h), Holling's disc equation: a = speed × sw
 | Reeds and cattails | kg reeds | 6,000 | 5 | 0.8 | 10 | 0.40 | 5.99 | handling (400) | 120,000 | 329 |  |
 | Flexible shoots | withies | 1,500 | 5 | 0.6 | 1 | 0.30 | 52.9 | handling (7.50) | 30,000 | 82.2 |  |
 | Fiber plants | kg raw fiber | 25.0 | 5 | 1 | 240 | 0.50 | 0.25 | handling (50.0) | 500 | 1.37 | kg of finished fibre; handling is stripping and cleaning |
-| Edible greens | kg greens | 15.0 | 3 | 1 | 15 | 0.30 | 2.12 | handling (1.13) | 300 | 4.93 |  |
-| Berries | kg berries | 10.0 | 5 | 1 | 30 | 0.50 | 1.43 | handling (2.50) | 200 | 1.10 | year-averaged; a ripe patch holds far more |
-| Nut trees | kg nuts in shell | 30.0 | 5 | 0.5 | 15 | 0.25 | 2.61 | handling (1.88) | 600 | 1.64 | year-averaged nuts on the ground |
-| Acorns | kg acorns | 50.0 | 5 | 0.5 | 10 | 0.25 | 4.05 | handling (2.08) | 1,000 | 2.74 | year-averaged acorns on the ground |
-| Seeding grasses | kg grass seed | 20.0 | 5 | 0.5 | 120 | 0.25 | 0.45 | handling (10.0) | 400 | 1.10 | handling is beating heads into a container |
+| Edible greens | kg greens | 40.0 | 3 | 1 | 15 | 0.30 | 3.00 | handling (3.00) | 800 | 16.1 | peak density; leaves from April to September |
+| Berries | kg berries | 40.0 | 5 | 1 | 30 | 0.50 | 1.82 | handling (10.0) | 800 | 7.60 | peak density; ripe July to September |
+| Nut trees | kg nuts in shell | 100 | 5 | 0.5 | 15 | 0.25 | 3.45 | handling (6.25) | 2,000 | 8.29 | peak density; fall in September and October, eaten by animals through winter |
+| Acorns | kg acorns | 160 | 5 | 0.5 | 10 | 0.25 | 5.22 | handling (6.67) | 3,200 | 13.3 | peak density; fall in September and October, eaten by animals through winter |
+| Seeding grasses | kg grass seed | 50.0 | 5 | 0.5 | 120 | 0.25 | 0.48 | handling (25.0) | 1,000 | 6.25 | peak density; heads ripen August to October; handling is beating them into a container |
 | Roots and tubers | kg raw tubers | 300 | 3 | 0.5 | 60 | 0.15 | 0.98 | handling (45.0) | 6,000 | 8.22 | handling is digging |
-| Bird nests | eggs | 4.00 | 10 | 1 | 5 | 1.00 | 3.00 | search (0.33) | 80.0 | 0.44 |  |
-| Grubs and insects | kg grubs | 3.00 | 5 | 0.5 | 60 | 0.25 | 0.43 | search (0.75) | 60.0 | 0.33 | handling is splitting rotten wood |
+| Bird nests | eggs | 12.0 | 10 | 1 | 5 | 1.00 | 6.00 | search (1.00) | 240 | 4.14 | peak density; nesting April to June |
+| Grubs and insects | kg grubs | 4.00 | 5 | 0.5 | 60 | 0.25 | 0.50 | search (1.00) | 80.0 | 1.90 | peak density; active April to October; handling is splitting rotten wood |
 | Mussels and crayfish | kg shellfish | 200 | 2 | 0.5 | 10 | 0.10 | 4.62 | handling (3.33) | 4,000 | 5.48 |  |
 | Cobbles | cobble | 3,000 | 3 | 1 | 0.5 | 0.30 | 106 | handling (7.50) | 60,000 | — |  |
 | Knappable stone | kg toolstone | 400 | 3 | 0.5 | 5 | 0.15 | 10.0 | handling (5.00) | 8,000 | — | handling is test-breaking nodules |
@@ -50,34 +50,36 @@ Whole-task times at a synthetic typical place (every resource the environment su
 | Debris hut, from nothing | woodland | nothing | 3.00 h | 2–5 h | ok | survival manuals commonly quote 2-3 hours with materials close by |
 | Lean-to, from nothing | woodland | nothing | 2.67 h | 1.5–5 h | ok | ridge pole, uprights, rafters and a thick cover |
 | Knap flakes, from nothing | woodland | nothing | 0.50 h | 0.25–1.5 h | ok | find a hammerstone and a nodule, a few minutes of striking |
-| First friction fire, from nothing | woodland | nothing | 3.36 h | 1–6 h | ok | make board and spindle, gather tinder and kindling, several tries |
+| First friction fire, from nothing | woodland | nothing | 3.51 h | 1–6 h | ok | make board and spindle, gather tinder and kindling, several tries |
 | Hafted stone axe, from nothing | woodland | nothing | 5.00 h | 2–10 h | ok | a knapped head, a haft, cordage lashing (experimental archaeology: hours, not days) |
 | Five metres of cordage, from nothing | woodland | nothing | 1.25 h | 0.75–3 h | ok | gathering and stripping fibre, then reverse-wrapping a few metres an hour |
 | Firewood for a night by a fire (25 kg) | woodland | nothing | 1.26 h | 0.75–3 h | ok | dead wood is abundant in woodland; armloads of 5-10 kg |
-| A day's food from nuts, with a hammerstone | woodland | cobble | 2.47 h | 1.5–6 h | ok | ethnographic nut return rates: roughly 1,000-2,000 kcal per hour once processed |
+| A day's food from nuts in autumn, with a hammerstone | woodland | cobble | 1.24 h | 1.2–6 h | ok | ethnographic nut return rates: roughly 1,000-2,500 kcal per hour once processed, more in a rich autumn |
 | Sleep on bare ground | woodland | nothing | 13.0 h | 9–15 h | ok | cold, broken sleep: long hours for little rest |
 | Sleep in a debris hut on a bed | woodland | bed, debris_hut | 8.42 h | 6.5–9.5 h | ok | a warm, dry night |
 | Water a day | woodland | nothing | 3.99 L | 3–6 L | ok | about 2.5 L at rest, more with work |
-| Upkeep with a basic camp | woodland | cobble, flake, stalk, hearth_board, bed, debris_hut | 13.6 h | 10–17 h | ok | with tools, fire, bed and hut, staying alive should leave a good part of the day free |
+| Upkeep in summer with a basic camp | woodland | cobble, flake, stalk, hearth_board, bed, debris_hut | 14.9 h | 10–17 h | ok | with tools, fire, bed and hut, staying alive should leave a good part of the day free |
 
 ## Sensitivity
 
-Elasticity of upkeep: the % change in hours a day per 1% change in the parameter (computed with a 10% change). Cases: bare-handed (woodland, 27.3 h/day); basic camp (woodland, 13.6 h/day); meadow, stone tools (meadow, 25.2 h/day). Largest first; parameters with no effect in any case are omitted.
+Elasticity of upkeep: the % change in hours a day per 1% change in the parameter (computed with a 10% change). Cases: bare-handed (woodland, 61.0 h/day); basic camp (woodland, 13.6 h/day); meadow, stone tools (meadow, 61.2 h/day). Largest first; parameters with no effect in any case are omitted.
 
 | Parameter | bare-handed | basic camp | meadow, stone tools |
 | --- | --- | --- | --- |
-| TUNE.TIRE | +0.43 | +0.32 | +0.50 |
-| TUNE.MET_AWAKE | +0.20 | +0.36 | +0.14 |
-| TUNE.HARM_HOURS | +0.18 | · | +0.20 |
-| nuts density | · | -0.17 | · |
-| berries density | -0.16 | · | · |
-| seeds handling | · | · | +0.15 |
-| TUNE.SICK_HOURS | +0.04 | +0.10 | +0.04 |
-| berries handling | +0.09 | · | · |
-| TUNE.COMMUTE | +0.04 | · | +0.04 |
-| seeds density | · | · | -0.03 |
-| tubers handling | · | +0.02 | · |
+| TUNE.HARM_HOURS | +0.55 | · | +0.56 |
+| TUNE.TIRE | +0.04 | +0.37 | +0.05 |
+| TUNE.MET_AWAKE | +0.10 | +0.21 | +0.10 |
+| TUNE.DAY_CAP | -0.12 | · | -0.21 |
+| TUNE.HUNGER_H | +0.16 | · | +0.15 |
+| TUNE.SICK_HOURS | +0.03 | +0.10 | +0.03 |
+| nuts density | · | -0.04 | · |
+| deadwood handling | · | +0.03 | · |
+| firewood fuel value | · | -0.03 | · |
+| nuts handling | · | +0.02 | · |
 | grass handling | · | +0.02 | · |
-| nuts handling | · | +0.01 | · |
+| berries density | -0.01 | · | -0.01 |
+| berries handling | +0.01 | · | +0.01 |
+| greens density | -0.01 | · | · |
+| seeds handling | · | · | +0.01 |
 
 Environments: woodland {"elev":0.3,"water":0.55,"canopy":0.7,"rock":0.4,"fert":0.5,"conifer":0.2,"flint":0.35,"clay":0.35}; meadow {"elev":0.35,"water":0.5,"canopy":0.25,"rock":0.3,"fert":0.65,"conifer":0.2,"flint":0.3,"clay":0.3}.

@@ -26,16 +26,18 @@
 //  * Every number marked (guess) is a judgment call, not a sourced value.
 
 import { KINDS } from './data/items.js';
-import { RESOURCES, PLACE_HA, encounter } from './data/resources.js';
+import { RESOURCES, PLACE_HA, encounter, snowFactor } from './data/resources.js';
 import { RECIPES, CAP_NAMES } from './data/recipes.js';
 import { capOf, contSpec, reach, here } from './items.js';
 import { travelInfo, planInput } from './actions.js';
 import { typical, sample, yieldsOf, outputsOf, kindsFor, unitsOf, makePlanner } from './plan.js';
 import { WEATHER, SLEEP_RECOVERY } from './sim.js';
+import { SEASONS, seasonOf, dayOfYear, daysLeftInSeason, seasonalT, monthOf } from './calendar.js';
 import { pieceSpread, piecesIn, bestOf } from './tiers.js';
 import { clamp, fmt } from './util.js';
+import { simplexMin } from './lp.js';
 
-export const NEEDS = ['sleep', 'food', 'water', 'fire', 'repairs'];
+export const NEEDS = ['sleep', 'food', 'water', 'fire', 'cold', 'repairs'];
 // Judgment calls, gathered here so the calibration report can vary them.
 export const TUNE = {
   SICK_HOURS: 10,  // hours lost to one bout of gut sickness (guess)
@@ -43,9 +45,16 @@ export const TUNE = {
   MET_AWAKE: 2.2,  // average metabolic rate while awake (1 = lying still)
   TIRE: 3.2,       // fatigue gained per waking hour at that pace
   COMMUTE: 1,      // hours a day to reach country you have not stripped (guess: ~2 km out and back)
+  STORE_H: 0.05,   // hours to put by and take out one litre of stored food (guess)
+  HUNGER_H: 0.004, // hours charged per kcal you cannot get at all: living off your body (guess; 12 h for a 3,000 kcal day)
+  DAY_CAP: 18,     // the most hours a day the food plan may ask for, all upkeep included
 };
 const FEED = 0.05 / 12;         // hours of feeding the fire per kg of wood
 const TRANCHES = [{ x: 0.85, f: 0.5, sus: true }, { x: 0.6, f: 0.5, sus: true }, { x: 0.85, f: Infinity, sus: false }];
+
+// Days of the year in each season (for averaging seasonal stocks).
+const SEASON_DAYS = SEASONS.map((S) => { const out = []; for (const m of S.months) for (let d = 0; d < 365; d++) if (monthOf(d) === m) out.push(d); return out; });
+const seasonDays = (i) => SEASON_DAYS[i];
 
 // ------------------------------------------------------------------ climate (long-run weather)
 let CLIMATE = null;
@@ -90,13 +99,16 @@ function bagLevel(kit, kind) {
   return v;
 }
 
+// The day's mean temperature of the stretch being evaluated (for snow cover).
+let SNOW_T = 20;
+
 // Units per hour of collecting from place resource r, at abundance fraction
 // x: search plus handling (see resources.js).
 function gatherRate(kit, rid, x, r) {
   const def = RESOURCES[rid], g = def.gather;
   if (!g || !r || (g.tool && kit.lvl(g.tool.cap) < g.tool.min)) return 0;
   const lv = g.boost ? (g.boost.cap === 'bag' ? bagLevel(kit, g.kind) : kit.lvl(g.boost.cap)) : 0;
-  return encounter(def, (x * r.cap) / PLACE_HA, lv);
+  return encounter(def, (x * r.cap * snowFactor(def, SNOW_T)) / PLACE_HA, lv);
 }
 
 // Hours of replacement work per hour of using a capability: the part that
@@ -210,7 +222,18 @@ function sweep(kit, ctx) {
 // comes from further afield: country like this (the land varies smoothly),
 // at the same rates, but a walk away, so it pays a daily commute and, for
 // what must come back to camp, the trips to carry it.
-function tranches(r, def) {
+function tranches(r, def, ctx) {
+  // A seasonal food in a given season: what is lying about (spread over the
+  // season) plus what is produced in it, at the abundance typical of it.
+  if (def.season && ctx && ctx.season != null && isFinite(r.cap)) {
+    const S = SEASONS[ctx.season], doys = seasonDays(ctx.season);
+    const frac = ctx.current ? clamp(r.amt / r.cap, 0, 1.5) : doys.reduce((a, d) => a + def.stock[d], 0) / doys.length;
+    const start = ctx.current ? r.amt / r.cap : def.stock[doys[0]];
+    const prod = (def.find.perYear * r.cap * S.months.reduce((a, m) => a + def.season.grow[m], 0)) / S.days;
+    const n = prod + (start * r.cap) / Math.max(1, ctx.daysLeft || S.days);
+    if (frac < 0.01 || n <= 1e-9) return [];
+    return [{ x: frac * 0.9, n: n / 2, sus: true }, { x: frac * 0.6, n: n / 2, sus: true }, { x: frac * 0.9, n: Infinity, sus: false }];
+  }
   const msy = def.regen > 0 && isFinite(r.cap) ? 1.06 * def.regen * r.cap : 0;
   if (!msy) return [{ x: clamp(r.amt / (r.cap || 1), 0.05, 1), n: Infinity, sus: !isFinite(r.cap) }];
   return TRANCHES.map((t) => ({ x: t.x, n: t.f * msy, sus: t.sus }));
@@ -316,13 +339,13 @@ function foodSupply(kit, ctx, E) {
     const k = KINDS[g.kind];
     if (!(k.food || k.crush || k.roast)) continue;
     const haul = p.rt / carryUnits(kit, g.kind);
-    for (const t of tranches(r, def)) {
+    for (const t of tranches(r, def, ctx)) {
       if (!t.sus) continue;
       const rate = gatherRate(kit, rid, t.x, r);
       if (!(rate > 0)) continue;
       const unitH = 1 / rate + haul, b = pick(foodRoutes(g.kind, kit, ctx, bitterOf(g.kind)), unitH, ctx.c);
       if (!b) continue;
-      offers.push({ rid, at: p.id, method: 'collect', sel: (unitH + b.h + b.fire * ctx.c) / b.v, lab: (unitH + b.h) / b.v, fire: b.fire / b.v, n: t.n * b.v, sus: true, how: b.how, rids: b.rids, v: b.v });
+      offers.push({ rid, at: p.id, method: 'collect', sel: (unitH + b.h + b.fire * ctx.c) / b.v, lab: (unitH + b.h) / b.v, fire: b.fire / b.v, n: t.n * b.v, sus: true, how: b.how, rids: b.rids, v: b.v, keep: keepDays(g.kind, b.rids), vol: KINDS[g.kind].vol / b.v });
     }
   }
   for (const rid in ctx.L.res) {
@@ -330,7 +353,7 @@ function foodSupply(kit, ctx, E) {
     if (!r.known) continue;
     const ms = foodMethods(kit, ctx, rid);
     if (!ms.length) continue;
-    for (const t of tranches(r, RESOURCES[rid])) {
+    for (const t of tranches(r, RESOURCES[rid], ctx)) {
       let top = null;
       for (const m of ms) {
         const unitH = m.unitH(t.x);
@@ -343,7 +366,7 @@ function foodSupply(kit, ctx, E) {
         }
         if (v <= 0) continue;
         const sel = (unitH + h + fire * ctx.c) / v;
-        if (!top || sel < top.sel) top = { rid, method: m.name, sel, lab: (unitH + h) / v, fire: fire / v, n: t.n * v, sus: t.sus, how, rids, v };
+        if (!top || sel < top.sel) top = { rid, method: m.name, sel, lab: (unitH + h) / v, fire: fire / v, n: t.n * v, sus: t.sus, how, rids, v, keep: keepDays(m.kinds[0][0], rids || []), vol: KINDS[m.kinds[0][0]].vol / v };
       }
       if (top) offers.push(top);
     }
@@ -352,7 +375,19 @@ function foodSupply(kit, ctx, E) {
   // Either live off what regrows here, or walk out each day and take the
   // cheapest food wherever it is: whichever costs less.
   const home = fillFood(offers.filter((o) => o.sus), E, ctx.c), away = fillFood(offers, E, ctx.c);
-  return home.cost <= away.cost ? home : away;
+  return Object.assign(home.cost <= away.cost ? home : away, { offers });
+}
+// How long food taken this way keeps, at its best-keeping stage along the
+// route (nuts in the shell, dried berries, jerky): days until it would turn.
+function keepDays(kind, rids) {
+  const kinds = [kind];
+  let cur = kind;
+  for (const rid of rids) {
+    const verb = rid.split('_')[0], base = rid.slice(verb.length + 1), k = KINDS[base];
+    cur = verb === 'crush' ? k.crush.to : verb === 'roast' ? k.roast.to : verb === 'boil' ? k.boil.to : verb === 'dry' ? k.dry.to : verb === 'butcher' ? 'meat' : base;
+    kinds.push(cur);
+  }
+  return Math.max(...kinds.map((kk) => { const rot = ((KINDS[kk] && KINDS[kk].decay) || {}).fresh; return rot ? 75 / rot : 365; }));
 }
 function fillFood(offers, E, c) {
   let left = E, hours = 0, fire = 0, short = 0;
@@ -441,7 +476,7 @@ function wornWarmth(kit) {
 // by how often that weather comes. Chill past 85 wakes you for good, so a
 // night that gets that cold gives only the sleep before it; chill past 70
 // costs health.
-function night(s, kit, fire, hours) {
+function night(s, kit, fire, hours, doy) {
   const e = here(s).env, cl = climate(), bed = kit.lvl('bed'), shelter = kit.lvl('shelter'), roof = kit.lvl('roof') >= 40;
   const w = wornWarmth(kit), n = Math.max(1, Math.round(hours));
   let q = 0, cold = 0, harm = 0, woke = 0;
@@ -450,7 +485,7 @@ function night(s, kit, fire, hours) {
     let chill = 0, pen = 0, slept = n, c30 = 0, dmg = 0;
     for (let i = 0; i < n; i++) {
       const h = (22 + i + 0.5) % 24;
-      const air = 17 - 9 * e.elev + 6 * Math.cos((2 * Math.PI * (h - 15)) / 24) + WEATHER.DT[wk];
+      const air = 17 - 9 * e.elev + seasonalT(doy) + 6 * Math.cos((2 * Math.PI * (h - 15)) / 24) + WEATHER.DT[wk];
       let T = air - 0.125 + w.warm + (shelter / 100) * 7 + (fire ? 9 : 0) + (bed / 100) * 6 - 3;
       if (wet && !roof && !w.rain) T -= 5;
       chill = T < 12 ? Math.min(100, chill + (12 - T) * 0.9) : Math.max(0, chill - ((T - 12) * 2 + 2));
@@ -466,9 +501,9 @@ function night(s, kit, fire, hours) {
 }
 // Hours of sleep a day: waking hours build fatigue at TIRE per hour, and
 // sleep clears SLEEP_RECOVERY x quality per hour, so S = 24 TIRE / (R q + TIRE).
-function sleepNeed(s, kit, fire) {
+function sleepNeed(s, kit, fire, doy) {
   let S = 8, r;
-  for (let i = 0; i < 3; i++) { r = night(s, kit, fire, S); S = clamp((24 * TUNE.TIRE) / (SLEEP_RECOVERY * r.q + TUNE.TIRE), 4, 16); }
+  for (let i = 0; i < 3; i++) { r = night(s, kit, fire, S, doy); S = clamp((24 * TUNE.TIRE) / (SLEEP_RECOVERY * r.q + TUNE.TIRE), 4, 16); }
   return Object.assign(r, { S });
 }
 
@@ -522,6 +557,127 @@ function repairs(kit, price) {
 }
 
 // ------------------------------------------------------------------ upkeep
+// One stretch of the year: the cheapest way to get through a day of it
+// (sleeping by a fire or not), with that stretch's cold and foods.
+function seasonSnap(s, kit, ctx, o) {
+  let best = null;
+  SNOW_T = 17 - 9 * here(s).env.elev + seasonalT(o.doy);
+  for (const nightFire of ctx.fire ? [false, true] : [false]) {
+    const sl = sleepNeed(s, kit, nightFire, o.doy);
+    const awake = 24 - sl.S;
+    ctx.E = 70 * (0.95 * sl.S + TUNE.MET_AWAKE * awake + 0.4 * sl.cold);
+    const W = 0.1 * sl.S + (0.1 + 0.12 * (TUNE.MET_AWAKE - 1)) * awake;
+    ctx.c = nightFire ? 0 : ctx.fireHour;
+    ctx.uc = {}; ctx.fr = {};
+    const food = foodSupply(kit, ctx, ctx.E);
+    const water = waterNeed(s, kit, ctx, W);
+    let F = nightFire ? sl.S : food.fire + water.fire;
+    if (o.mode === 'keep' && ctx.fire) F = 24; // nothing to relight it with: never let it die
+    const f = F > 0 ? fuelFor(o.fuel, F * o.burn) : { hours: 0, short: 0 };
+    const fireH = F > 0 ? f.hours + o.lightH * (o.mode === 'light' ? 1 : 0) : 0;
+    const parts = { sleep: sl.S + TUNE.HARM_HOURS * sl.harm, food: food.hours, water: water.h, fire: fireH, cold: 0, repairs: o.rep.h };
+    parts.cold = coldWork(s, kit, o.doy, parts);
+    const U = NEEDS.reduce((a, k) => a + parts[k], 0);
+    if (!best || U < best.U) best = { ctxC: ctx.c, U, parts, nightFire, sleep: sl, E: ctx.E, W, food, water, fire: { F, mode: o.mode, burn: o.burn, short: f.short, light: o.lightH }, repairs: o.rep, season: ctx.season, days: o.days, doy: o.doy };
+  }
+  return best;
+}
+
+// Work goes slower in the cold: daytime felt temperature while working, and
+// up to 30% more time on everything done outdoors (as the simulation's
+// impairment does once chilled).
+function coldSlow(s, kit, doy) {
+  const cl = climate(), w = wornWarmth(kit);
+  const T = 17 - 9 * here(s).env.elev + seasonalT(doy) + 4.5 + cl.dT + (TUNE.MET_AWAKE + 0.3 - 1) * 2.5 + w.warm - (w.rain ? 0 : 5 * cl.rain);
+  return Math.min(0.3, Math.max(0, 12 - T) * 0.03);
+}
+function coldWork(s, kit, doy, parts) {
+  return coldSlow(s, kit, doy) * (parts.food + parts.water + parts.fire + parts.repairs);
+}
+
+// The year's food plan. Food can be eaten in the stretch it is taken, or
+// put by for a later one if it keeps that long: stored in containers it
+// loses 10% a season (in the open, 40%), and putting it by costs a little
+// handling. The plan is the cheapest way to cover every stretch's food: a
+// small linear program (offers x stretches, with losses), solved exactly.
+// Container space limits what can be stored under cover. What cannot be had
+// at all is charged as living off your body.
+function storePlan(s, snaps, kit, fuel, burn, lightH, mode) {
+  const cool = kit.has((it) => { const c = contSpec(it); return c && c.cool; });
+  let capL = 0;
+  for (const it of kit.items) { const c = contSpec(it); if (c && !c.liquid) capL += c.vol; }
+  const days = snaps.map((x) => x.days), mid = (i) => days.slice(0, i).reduce((a, d) => a + d, 0) + days[i] / 2;
+  // columns: one per (offer, stretch it feeds, kept in a container or not)
+  const offers = [], cols = [];
+  snaps.forEach((sn, i) => sn.food.offers.forEach((o) => {
+    const cap = o.n * days[i];
+    if (!(cap > 0)) return;
+    const oi = offers.push({ o, i, cap }) - 1;
+    const per = (o.lab + (o.sus ? 0 : TUNE.COMMUTE / sn.E)) * (1 + coldSlow(s, kit, sn.doy)); // hours per kcal taken, slower in the cold
+    for (let j = i; j < snaps.length; j++) {
+      if (j === i) { cols.push({ oi, i, j, loss: 0, box: false, cost: per + o.fire * snaps[i].ctxC }); continue; }
+      const gap = mid(j) - mid(i);
+      if (o.keep * (cool ? 2.5 : 1) < gap) continue;
+      for (const [box, rate] of [[true, 0.1], [false, 0.4]]) {
+        const loss = 1 - Math.pow(1 - rate, gap / 91);
+        cols.push({ oi, i, j, loss, box, cost: per + o.fire * snaps[i].ctxC + TUNE.STORE_H * o.vol * (1 - loss) });
+      }
+    }
+  }));
+  // rows: each offer's capacity, each stretch's demand, container space, and
+  // each stretch's working time (no more than DAY_CAP hours a day in all)
+  const nX = cols.length, nO = offers.length, J = snaps.length, nCols = nX + J + nO + 1 + J;
+  const rows = [], b = [], start = [];
+  offers.forEach((of, k) => { const r = new Float64Array(nCols); cols.forEach((c, x) => { if (c.oi === k) r[x] = 1; }); r[nX + J + k] = 1; rows.push(r); b.push(Math.min(of.cap, 1e9)); start.push(nX + J + k); });
+  snaps.forEach((sn, j) => { const r = new Float64Array(nCols); cols.forEach((c, x) => { if (c.j === j) r[x] = 1 - c.loss; }); r[nX + j] = 1; rows.push(r); b.push(sn.E * days[j]); start.push(nX + j); });
+  { const r = new Float64Array(nCols); cols.forEach((c, x) => { if (c.box) r[x] = (1 - c.loss) * offers[c.oi].o.vol; }); r[nX + J + nO] = 1; rows.push(r); b.push(capL); start.push(nX + J + nO); }
+  snaps.forEach((sn, i) => {
+    const r = new Float64Array(nCols);
+    cols.forEach((c, x) => { if (c.i === i) r[x] = c.cost; });
+    r[nX + J + nO + 1 + i] = 1; rows.push(r);
+    const other = sn.sleep.S + sn.parts.water + sn.parts.fire + sn.parts.repairs + sn.parts.cold; // hours actually spent (not the charge for cold harm)
+    b.push(Math.max(0, (TUNE.DAY_CAP - other) * days[i])); start.push(nX + J + nO + 1 + i);
+  });
+  const cost = new Float64Array(nCols);
+  cols.forEach((c, x) => { cost[x] = c.cost; });
+  for (let j = 0; j < J; j++) cost[nX + j] = TUNE.HUNGER_H;
+  const x = simplexMin(cost, rows, b, start);
+  const lab = snaps.map(() => 0), fireH = snaps.map(() => 0), storeH = snaps.map(() => 0), short = snaps.map((sn, j) => x[nX + j]);
+  const putBy = [];
+  cols.forEach((c, k) => {
+    const g = x[k];
+    if (g <= 1e-6) return;
+    const o = offers[c.oi].o;
+    lab[c.i] += g * (o.lab + (o.sus ? 0 : TUNE.COMMUTE / snaps[c.i].E));
+    fireH[c.i] += g * o.fire;
+    if (c.j > c.i) { storeH[c.i] += g * (1 - c.loss) * TUNE.STORE_H * o.vol; putBy.push({ from: c.i, to: c.j, rid: o.rid, at: o.at, kcal: g, box: c.box }); }
+  });
+  const need = short;
+  // each stretch's hours again, with the food plan's work where it falls
+  const seasons = snaps.map((sn, i) => {
+    const parts = Object.assign({}, sn.parts);
+    parts.food = lab[i] / days[i] + storeH[i] / days[i] + (need[i] / days[i]) * TUNE.HUNGER_H;
+    let F = sn.nightFire ? sn.sleep.S : fireH[i] / days[i] + sn.water.fire;
+    if (mode === 'keep' && sn.fire.F === 24) F = 24;
+    parts.fire = F > 0 ? fuelFor(fuel, F * burn).hours + lightH * (mode === 'light' ? 1 : 0) : 0;
+    parts.cold = coldWork(s, kit, sn.doy, parts);
+    const U = NEEDS.reduce((a, k) => a + parts[k], 0);
+    return { season: sn.season, days: days[i], U, parts, short: need[i] / days[i] };
+  });
+  const total = days.reduce((a, d) => a + d, 0);
+  const parts = {};
+  for (const k of NEEDS) parts[k] = seasons.reduce((a, x) => a + x.parts[k] * x.days, 0) / total;
+  const U = NEEDS.reduce((a, k) => a + parts[k], 0);
+  const worst = seasons.reduce((a, x) => (x.U > a.U ? x : a), seasons[0]);
+  const nowPut = putBy.filter((x) => x.from === 0);
+  return { U, parts, seasons, worst, putBy, putByToday: nowPut.reduce((a, x) => a + x.kcal, 0) / days[0], putRids: [...new Set(nowPut.map((x) => x.rid))] };
+}
+
+// ------------------------------------------------------------------ upkeep
+// Upkeep is the average over the coming year: the rest of this stretch, then
+// the three after it, each a steady state of its own, joined by the food
+// plan. The current stretch uses what is actually lying about here now;
+// later ones, what is typical for the time of year.
 export function upkeep(s, extraKinds = [], baseItems = null) {
   const kit = makeKit(s, extraKinds, baseItems), cl = climate(), L = here(s);
   // other known places, with the hours of a round trip there and back
@@ -541,39 +697,32 @@ export function upkeep(s, extraKinds = [], baseItems = null) {
   }
   const lightH = mode === 'light' && ctx.fire ? lightCost(kit, ctx) : 0;
   const rep = repairs(kit, sw.price);
-  let best = null;
-  for (const nightFire of ctx.fire ? [false, true] : [false]) {
-    const sl = sleepNeed(s, kit, nightFire);
-    const awake = 24 - sl.S;
-    ctx.E = 70 * (0.95 * sl.S + TUNE.MET_AWAKE * awake + 0.4 * sl.cold);
-    const W = 0.1 * sl.S + (0.1 + 0.12 * (TUNE.MET_AWAKE - 1)) * awake;
-    ctx.c = nightFire ? 0 : ctx.fireHour;
-    ctx.uc = {}; ctx.fr = {};
-    const food = foodSupply(kit, ctx, ctx.E);
-    const water = waterNeed(s, kit, ctx, W);
-    let F = nightFire ? sl.S : food.fire + water.fire;
-    if (mode === 'keep' && ctx.fire) F = 24; // nothing to relight it with: never let it die
-    const f = F > 0 ? fuelFor(fuel, F * burn) : { hours: 0, short: 0 };
-    const fireH = F > 0 ? f.hours + lightH * (mode === 'light' ? 1 : 0) : 0;
-    const parts = { sleep: sl.S + TUNE.HARM_HOURS * sl.harm, food: food.hours, water: water.h, fire: fireH, repairs: rep.h };
-    const U = NEEDS.reduce((a, k) => a + parts[k], 0);
-    if (!best || U < best.U) best = { ctxC: ctx.c, U, parts, nightFire, sleep: sl, E: ctx.E, W, food, water, fire: { F, mode, burn, short: f.short, light: lightH }, repairs: rep, price: sw.price };
+  const doy = dayOfYear(s), cur = seasonOf(doy), snaps = [];
+  for (let k = 0; k < 4; k++) {
+    const si = (cur + k) % 4, days = k === 0 ? daysLeftInSeason(doy) : SEASONS[si].days;
+    Object.assign(ctx, { season: si, current: k === 0, daysLeft: days });
+    snaps.push(seasonSnap(s, kit, ctx, { fuel, burn, mode, lightH, rep, doy: k === 0 ? doy : SEASONS[si].mid, days }));
   }
+  const year = storePlan(s, snaps, kit, fuel, burn, lightH, mode);
+  const now = snaps[0];
   // Foods worth looking for elsewhere, with what you have: kcal per hour of
   // collecting and preparing, at a typical place that has them.
-  ctx.c = best.ctxC; ctx.uc = {}; ctx.fr = {};
-  best.foodRank = [];
+  Object.assign(ctx, { season: cur, current: true, daysLeft: now.days, c: now.ctxC, uc: {}, fr: {} });
+  const foodRank = [];
   for (const rid in RESOURCES) {
     const def = RESOURCES[rid], g = def.gather;
     if (!g || !def.find || (g.tool && kit.lvl(g.tool.cap) < g.tool.min)) continue;
     const k = KINDS[g.kind];
     if (!(k.food || k.crush || k.roast)) continue;
-    const rate = gatherRate(kit, rid, 0.6, { cap: def.cap });
+    const inSeason = def.season ? def.stock[doy] : 1;
+    if (inSeason < 0.05) continue;
+    const rate = gatherRate(kit, rid, 0.6 * inSeason, { cap: def.cap });
     const b = rate > 0 && pick(foodRoutes(g.kind, kit, ctx, bitterOf(g.kind)), 1 / rate, ctx.c);
-    if (b) best.foodRank.push({ rid, kcalh: b.v / (1 / rate + b.h) });
+    if (b) foodRank.push({ rid, kcalh: b.v / (1 / rate + b.h) });
   }
-  best.foodRank.sort((a, b) => b.kcalh - a.kcalh);
-  return best;
+  foodRank.sort((a, b) => b.kcalh - a.kcalh);
+  // the details of today (what to eat, how you sleep) with the year's totals
+  return Object.assign({}, now, { U: year.U, parts: year.parts, now, year, foodRank, price: sw.price });
 }
 
 // ------------------------------------------------------------------ projects
@@ -693,7 +842,10 @@ export function projectRows(s, P, include = []) {
     const needs = prog ? prog.proj.left : labor(n);
     const nh = needs / 60;
     const horizon = ev.saves > 1e-6 ? Math.max(0, (nh - ev.oneoff) / ev.saves) : ev.oneoff >= nh - 1e-9 && ev.oneoff > 0 ? 0 : Infinity;
-    rows.push({ key, rid, name: n.name, node: n, prog, goal, ready: n.ready || !!prog, needs, wait: prog ? 0 : waitOf(n), saves: ev.saves, by: ev.by, oneoff: ev.oneoff, horizon, gained, after: ev.u, why: ev.why, note });
+    // a project that brings the hardest stretch of the year within a day's work matters more than its hours
+    const survive = base.year && base.year.worst.U > 24 && ev.u.year && ev.u.year.worst.U <= 24;
+    if (survive) note = 'gets you through the hardest stretch of the year' + (note ? '; ' + note : '');
+    rows.push({ key, rid, name: n.name, node: n, prog, goal, ready: n.ready || !!prog, needs, wait: prog ? 0 : waitOf(n), saves: ev.saves, by: ev.by, oneoff: ev.oneoff, horizon, gained, after: ev.u, why: ev.why, note, survive });
   }
   const EPS = 0.05;
   const pinned = (r) => r.goal || r.prog || include.includes(r.key);
@@ -704,10 +856,11 @@ export function projectRows(s, P, include = []) {
   return { base, rows: keep };
 }
 
+const lifeFirst = (a, b) => (b.survive ? 1 : 0) - (a.survive ? 1 : 0);
 export const SORTS = {
-  horizon: (a, b) => a.horizon - b.horizon || b.saves - a.saves || a.needs - b.needs,
-  needs: (a, b) => a.needs - b.needs || a.horizon - b.horizon,
-  saves: (a, b) => b.saves - a.saves || a.needs - b.needs,
+  horizon: (a, b) => lifeFirst(a, b) || a.horizon - b.horizon || b.saves - a.saves || a.needs - b.needs,
+  needs: (a, b) => lifeFirst(a, b) || a.needs - b.needs || a.horizon - b.horizon,
+  saves: (a, b) => lifeFirst(a, b) || b.saves - a.saves || a.needs - b.needs,
 };
 
 // The one or two needs a project helps (or costs) most, in words.

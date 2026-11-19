@@ -245,7 +245,7 @@ first. `npm test` fails if a benchmark leaves its range.
 A survivor's progress is measured as the hours a day that staying alive
 takes, and every project is judged by how much it cuts them.
 
-    U = sleep + food + water + fire + repairs      (hours a day, at this place)
+    U = sleep + food + water + fire + cold + repairs   (hours a day, at this place, averaged over the coming year)
 
 Only the body's needs are demanded directly: energy, water, rest and
 warmth. Everything else is derived demand and reaches U through *prices*,
@@ -302,6 +302,45 @@ What is reproducible: given a state, every number here is deterministic
 and the evaluator never changes the state (tested). What is guessed: the
 1 h walk, 10 h per sickness, 1 h per health point, and the 85%/60%
 abundance split are judgment calls; the rest follows the game's own rules.
+
+## The year (src/calendar.js)
+
+A fixed temperate year with a real winter; every game starts in mid-July.
+The player never sees a date: the year shows in the temperature, the
+length of the days, what is ripe, and snow.
+
+- **Climate.** Mid-January is 16 °C colder than mid-July; daylight runs
+  from 15.5 h to 8.5 h.
+- **Seasonal foods** (nuts, acorns, berries, greens, seeds, eggs, grubs)
+  are produced in their months (`season.grow`) and lose a share of the
+  standing stock every day to animals and rot (`season.loss`); a place's
+  stock follows from that (`def.stock[day]`), peaking at the stated
+  density. Nuts fall in September and October and dwindle through winter.
+- **Snow.** When the day's mean temperature is below freezing, ground-level
+  things are mostly hidden or frozen in (`find.snow`: a quarter of the nuts
+  can still be found, a fifth of the tubers, a tenth of the clay).
+
+**Upkeep over the year.** Upkeep is the average over the coming year: the
+rest of this season, then the three after it, each evaluated as a steady
+state of its own (that season's cold, nights, foods and snow; the current
+one with what is actually lying about). A new part, *cold*, charges the
+slower work of being chilled (up to 30% on everything done outdoors), so
+clothing has a value. The seasons are joined by the food plan:
+
+**The food plan.** Food can be eaten when it is taken or put by for later if
+it keeps that long (at its best-keeping stage: nuts in the shell, dried
+berries, jerky; a cool pit keeps things 2.5 times as long). Stored under
+cover it loses 10% a season, in the open 40%, and putting it by costs a
+little handling. The cheapest way to cover every season's food is a small
+linear program (offers × seasons, with losses; container space; no season
+asked for more than 18 h a day of upkeep), solved exactly by a simplex in
+`src/lp.js`. What cannot be had at all is charged as living off your body.
+The plan is shown, not asked for: each meal's collecting takes the share
+being put by, and food that keeps gets a "store it" task.
+
+Projects are ranked on the year's average. One that brings the hardest
+season within a day's work is marked as getting you through it and ranked
+first, whatever its hours.
 
 ## Time
 

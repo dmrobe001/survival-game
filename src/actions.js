@@ -12,10 +12,11 @@
 
 import { clamp, rand, randn, fmt, fmtTime, stream } from './util.js';
 import { KINDS, UNIT } from './data/items.js';
-import { RESOURCES, PLACE_HA, encounter } from './data/resources.js';
+import { RESOURCES, PLACE_HA, encounter, snowFactor } from './data/resources.js';
 import { RECIPES, TAG_NAMES, CAP_NAMES } from './data/recipes.js';
 import { genLocation, findStart, prospect, dist, bearing } from './world.js';
 import { pieceSpread, piecesIn, pieceSize, tierKey, tierRank, tiersOf } from './tiers.js';
+import { START_DOY, dayOfYear, seasonalT } from './calendar.js';
 import { kindOf, mk, itemName, label, massOf, contSpec, whyNotHold, roomFor, capOf, addTo, split, reach, find, removeFrom, canMerge,
   best, here, handsFor, handsUsed, carriedMass, wornIn, missingSlots, trashHere, tierLabel, pieceKind, piecesOf, setPieces, pieceScore, bestPieceFor, ids } from './items.js';
 import { say, advance, isDark, raining, condSev, footwear, impairment } from './sim.js';
@@ -26,6 +27,7 @@ export const MAX_CARRY = 35; // kg felt
 function addLocation(s, loc, alsoKnown = []) {
   loc.id = 'L' + s.nextLoc++;
   for (const rid in loc.res) loc.res[rid].known = alsoKnown.includes(rid) || rand(s.rng) < RESOURCES[rid].vis;
+  inSeason(loc, dayOfYear(s));
   loc.surveys = 0;
   s.locs[loc.id] = loc;
   return loc;
@@ -36,7 +38,7 @@ export function newGame(seed) {
   const s = {
     v: 1, seed, rng: stream('play|' + seed), t: 8 * 60, nextId: 1, nextLoc: 1, at: null, locs: {},
     c: { stomach: 300, glyc: 1500, fat: 60000, thirst: 0.3, fatigue: 10, chill: 0, health: 100, cond: [], hands: [], worn: [] },
-    weather: { kind: 'clear', dT: 1, until: 8 * 60 + 300 }, log: [], seen: {}, goals: {}, dead: null, rv: 2,
+    weather: { kind: 'clear', dT: 1, until: 8 * 60 + 300 }, log: [], seen: {}, goals: {}, dead: null, rv: 2, doy0: START_DOY,
   };
   const start = addLocation(s, findStart(seed), ['water', 'deadwood']);
   s.at = start.id; s.home = start.id;
@@ -46,12 +48,17 @@ export function newGame(seed) {
   return s;
 }
 
+// What is lying about of seasonal things depends on the time of year.
+function inSeason(loc, doy) {
+  for (const rid in loc.res) { const def = RESOURCES[rid], r = loc.res[rid]; if (def.season && isFinite(r.cap)) r.amt = Math.min(r.amt, r.cap) * def.stock[doy]; }
+}
+
 // Saves from before resources were restated as densities (rv 2): the world
 // is a pure function of the seed, so regenerate each known place's amounts
 // and keep how depleted each resource was. New resources (sticks) appear,
 // and new deposit qualities (pole strength) are filled in.
 export function migrate(s) {
-  if (s.rv >= 2) return s;
+  if (s.rv >= 2) { migrateYear(s); return s; }
   for (const id in s.locs) {
     const loc = s.locs[id], fresh = genLocation(s.seed, loc.x, loc.y);
     for (const rid in fresh.res) {
@@ -63,7 +70,14 @@ export function migrate(s) {
     }
   }
   s.rv = 2;
+  migrateYear(s);
   return s;
+}
+// Saves from before the calendar: they started in mid-July like new games.
+function migrateYear(s) {
+  if (s.doy0 != null) return;
+  s.doy0 = START_DOY;
+  for (const id in s.locs) inSeason(s.locs[id], dayOfYear(s));
 }
 
 // ------------------------------------------------------------------ small helpers
@@ -181,7 +195,9 @@ export function gatherStatus(s, rid) {
     lines.push({ ok: b.level > 0, opt: true, text: `faster handling with a ${CAP_NAMES[g.boost.cap]} ${b.it ? `(${itemName(b.it)}: ×${fmt(1 + b.level / g.boost.per)})` : ''}` });
   }
   // search plus handling: the thinner a resource gets, the longer the search
-  const rate = encounter(def, r.amt / PLACE_HA, level) / slowdown(s, true);
+  const snow = snowFactor(def, 17 - 9 * loc(s).env.elev + seasonalT(dayOfYear(s)));
+  const rate = encounter(def, (r.amt * snow) / PLACE_HA, level) / slowdown(s, true);
+  if (snow < 0.95) lines.push({ ok: true, opt: true, text: `snow and frozen ground hide most of it (×${fmt(snow)})` });
   const boost = g.boost ? 1 + level / g.boost.per : 1;
   if (r.amt < (KINDS[g.kind].unit === 'ea' ? 1 : 0.05)) { ok = false; lines.push({ ok: false, text: 'none left for now' }); }
   return { ok, lines, rate, boost, level, def, r };

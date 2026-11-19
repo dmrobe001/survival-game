@@ -20,8 +20,9 @@ export const PLACES = {
 };
 
 // A fresh character at a typical place, holding the given kinds (typical pieces).
-export function typicalState(place, kit = []) {
+export function typicalState(place, kit = [], doy = 200) {
   const s = newGame('calibration');
+  s.doy0 = doy; // the day of the year the benchmark is set on
   const L = here(s), env = PLACES[place];
   Object.assign(L, { env, name: 'typical ' + place, res: {}, surveys: 3, items: [] });
   for (const id in RESOURCES) {
@@ -29,7 +30,7 @@ export function typicalState(place, kit = []) {
     if (a < 0.25) continue;
     const cap = def.cap === Infinity ? Infinity : def.cap * Math.min(a, 1.6), q = {};
     for (const k in def.q) q[k] = (typeof def.q[k] === 'function' ? def.q[k](env) : def.q[k])[0];
-    L.res[id] = { cap, amt: cap, q, known: true, assessed: true };
+    L.res[id] = { cap, amt: cap * (def.season ? def.stock[doy] : 1), q, known: true, assessed: true };
   }
   for (const k of kit) L.items.push(Object.assign(JSON.parse(JSON.stringify(typical(k))), { id: s.nextId++ }));
   return s;
@@ -58,19 +59,19 @@ export const BENCH = [
     basis: 'gathering and stripping fibre, then reverse-wrapping a few metres an hour' },
   { name: 'Firewood for a night by a fire (25 kg)', place: 'woodland', unit: 'h', range: [0.75, 3], get: (s) => 25 / gatherStatus(s, 'deadwood').rate,
     basis: 'dead wood is abundant in woodland; armloads of 5-10 kg' },
-  { name: 'A day\'s food from nuts, with a hammerstone', place: 'woodland', kit: ['cobble'], unit: 'h', range: [1.5, 6], get: (s) => upkeep(s).parts.food,
-    basis: 'ethnographic nut return rates: roughly 1,000-2,000 kcal per hour once processed' },
+  { name: 'A day\'s food from nuts in autumn, with a hammerstone', place: 'woodland', kit: ['cobble'], doy: 280, unit: 'h', range: [1.2, 6], get: (s) => upkeep(s).now.parts.food,
+    basis: 'ethnographic nut return rates: roughly 1,000-2,500 kcal per hour once processed, more in a rich autumn' },
   { name: 'Sleep on bare ground', place: 'woodland', unit: 'h', range: [9, 15], get: (s) => upkeep(s).sleep.S,
     basis: 'cold, broken sleep: long hours for little rest' },
   { name: 'Sleep in a debris hut on a bed', place: 'woodland', kit: ['bed', 'debris_hut'], unit: 'h', range: [6.5, 9.5], get: (s) => upkeep(s).sleep.S,
     basis: 'a warm, dry night' },
   { name: 'Water a day', place: 'woodland', unit: 'L', range: [3, 6], get: (s) => upkeep(s).W,
     basis: 'about 2.5 L at rest, more with work' },
-  { name: 'Upkeep with a basic camp', place: 'woodland', kit: CAMP, unit: 'h', range: [10, 17], get: (s) => upkeep(s).U,
+  { name: 'Upkeep in summer with a basic camp', place: 'woodland', kit: CAMP, unit: 'h', range: [10, 17], get: (s) => upkeep(s).now.U,
     basis: 'with tools, fire, bed and hut, staying alive should leave a good part of the day free' },
 ];
 
 export function runBench(b) {
-  const v = b.get(typicalState(b.place, b.kit || []));
+  const v = b.get(typicalState(b.place, b.kit || [], b.doy));
   return { v, ok: v >= b.range[0] && v <= b.range[1] };
 }
