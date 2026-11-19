@@ -97,8 +97,9 @@ function foodChain(s, P, up) {
     const waiting = items.find((it) => it.kind === st.kind && it.proc && i > 0 && stages[i - 1].rid.startsWith('soak'));
     if (waiting) return { task: null, prepH: waiting.proc.left / 60 + st.h + later }; // nothing to do but wait
     if (!items.some((it) => !it.proc && matchesStage(it, st))) continue;
-    const task = recipeTask(s, st.rid, '') || firstTask(s, P, P.node('r.' + st.rid), '');
-    return { task, prepH: st.h + later };
+    // if this step cannot be done yet (the fire has gone out), its own preparation counts too
+    const ready = recipeTask(s, st.rid, ''), n = ready ? null : P.node('r.' + st.rid);
+    return { task: ready || firstTask(s, P, n, ''), prepH: (ready ? st.h : Math.max(st.h, hoursOf(n))) + later };
   }
   // nothing in hand yet: collect a meal's worth
   const prep = stages.reduce((a, x) => a + x.h, 0) + 1 / 6;
@@ -127,7 +128,8 @@ function foodScout(s, P, up, burn) {
     if (!best || h < best.h) best = { rid: f.rid, h, n };
   }
   if (!best || !isFinite(best.h)) return null;
-  return { task: firstTask(s, P, best.n, `before the food here runs out`), prepH: best.h, lineH };
+  // getting there, then collecting and preparing a first meal (an allowance: the place is not known yet)
+  return { task: firstTask(s, P, best.n, `before the food here runs out`), prepH: best.h + 1.5, lineH };
 }
 
 // What it takes to have a fire burning for `hours`: feed it, rekindle it,
@@ -178,12 +180,14 @@ function needTasks(s, P, up, top) {
     if (w) consider({ key: 'x.drink', name: 'Drink', cmd: { t: 'drink' }, minutes: 3, met: 1.5, mode: 'rest', note: `purity ${Math.round(w.purity)}` }, 0.05, tThirsty);
     else if (carried.length) consider({ key: 'd.' + carried[0].it.id, name: 'Drink carried water', cmd: { t: 'drinkItem', id: carried[0].it.id }, minutes: 3, met: 1.5, mode: 'rest' }, 0.05, tThirsty);
   }
-  if (!w) { const n = P.node('g.water'); consider(firstTask(s, P, n, ''), hoursOf(n), tThirsty + litres / thirstRate(met, false)); }
+  if (!w) { const n = P.node('g.water'); consider(firstTask(s, P, n, ''), hoursOf(n) + 0.05, tThirsty + litres / thirstRate(met, false)); }
   // sleep: by bedtime or when tired, with a fire first if nights here want one
   const hr = hourOf(s), tBed = hr >= 22 || hr < 5 ? 0 : hr >= 12 ? 22 - hr : Infinity;
   const tSleep = Math.min(until('Stamina'), tBed);
-  if (up && up.nightFire && up.fire.mode) { const f = fireChain(s, P, up.sleep.S); if (f) consider(f.task, f.prepH, tSleep); }
-  consider(SLEEP_TASK, 0, tSleep);
+  // one chain: the fire for the night (if nights here want one), then sleep;
+  // due when the top task plus all of it would run past bedtime
+  const f = up && up.nightFire && up.fire.mode ? fireChain(s, P, up.sleep.S) : null;
+  consider(f && f.task ? f.task : SLEEP_TASK, f ? f.prepH : 0, tSleep);
   // warmth while awake: a fire, if you can make one
   const tCold = until('Warmth');
   if (isFinite(tCold) && up && up.fire.mode) { const f = fireChain(s, P, 2); if (f) consider(f.task, f.prepH, tCold); }

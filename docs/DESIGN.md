@@ -95,8 +95,8 @@ now, what is on the ground, and your two hands.
   project's route come first, in route order. A collecting step that has
   to turn up a good-enough piece says how often one does ("about 47% of
   the cobbles here will do for a hammer (35+)").
-- **Needs push in when they must.** Each need has a step that meets it
-  (eat, drink, sleep) and a chain that makes the step possible: the next
+- **Needs push in when they must.** Each need has a chain of steps that
+  ends in meeting it: the next
   step toward a meal by the upkeep evaluator's cheapest food (collect, then
   each recipe of its route, with waits such as leaching overnight, picking
   up where you are), walking or exploring to water, a fire before bed when
@@ -109,6 +109,9 @@ now, what is on the ground, and your two hands.
   day of the time it takes to find more, walking to or exploring for the
   best foods you could use (ranked by kcal per hour with what you have)
   comes up too. Bedtime is 22:00, or sooner if you tire.
+  The test is the top task plus *every* remaining step of the chain (a step
+  that cannot be done yet counts its own preparation, such as relighting a
+  fire); only the next step is pushed up, one at a time.
 - **Finishing the selected project** (the technique succeeds, or one
   collecting trip for a collecting project) closes it, or, if you reached
   it through a requirement link, goes back up to the project it was a step
