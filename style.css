@@ -290,3 +290,11 @@ h2.pane-h small, .pane-h small { text-transform: none; letter-spacing: 0; font-w
 
 .upkeep-h b { white-space: nowrap; }
 .upkeep-h small { flex: 0 0 auto; }
+
+.upkeep-top { display: flex; align-items: center; gap: 6px; }
+.upkeep-top .upkeep-h { flex: 1; min-width: 0; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; flex: 0 0 auto; }
+.segb { min-height: 24px; padding: 2px 8px; border: 0; border-radius: 0; background: var(--bg); color: var(--muted); font: 0.68rem/1.2 var(--mono); }
+.segb[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.upkeep-h > span { white-space: nowrap; }
+.upkeep-h small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }

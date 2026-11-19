@@ -46,7 +46,7 @@ function taskForStep(s, P, key, why, step) {
   const reason = step ? step.why || '' : P.whyOf(key); // why this step, for this project
   if (reason) why = reason;
   if (n.w.mode === 'here') return gatherTask(s, rid, why, step && step.wants ? { wants: step.wants } : {}, step && step.wants && step.wants.some((w) => w.req) ? step.minutes : 0);
-  if (n.w.mode === 'goto') { const info = travelInfo(s, n.w.to); return { key: 'go.' + n.w.to, name: `Walk to ${s.locs[n.w.to].name.toLowerCase()}`, cmd: { t: 'travel', to: n.w.to }, minutes: info.minutes, met: info.met, mode: 'travel', why: why || `for ${RESOURCES[rid].name.toLowerCase()}`, note: `${fmt(info.km)} km` }; }
+  if (n.w.mode === 'goto') { const info = travelInfo(s, n.w.to); return { key: 'go.' + n.w.to, name: `Walk to ${s.locs[n.w.to].name.toLowerCase()}`, cmd: { t: 'travel', to: n.w.to }, minutes: info.minutes, met: info.met, mode: 'travel', why: `for ${thingOf(rid)}`, note: `${fmt(info.km)} km` }; }
   return { key: 'x.find.' + rid, name: `Explore for ${reason ? 'better ' : ''}${RESOURCES[rid].name.toLowerCase()}`, cmd: { t: 'explore', hours: n.w.hours, targets: [rid] }, minutes: n.w.hours * 60, met: 3.5, mode: 'travel', why,
     note: reason ? 'quality varies by place' : `about ${Math.round(n.w.p * 100)}% chance per trip` };
 }
@@ -60,6 +60,13 @@ const SLEEP_TASK = { key: 'x.sleep', name: 'Sleep', cmd: { t: 'sleep' }, minutes
 const REST_TASK = { key: 'rest', name: 'Rest an hour', cmd: { t: 'rest', min: 60 }, minutes: 60, met: 1.1, mode: 'rest' };
 
 const MEAL = 1500; // kcal: what one sitting of eating should bring
+// What you would go somewhere for, in a word or two: "water", "berries", "cobbles".
+function thingOf(rid) {
+  const g = RESOURCES[rid].gather;
+  if (!g) return rid === 'water' ? 'water' : RESOURCES[rid].name.toLowerCase();
+  const k = KINDS[g.kind], name = k.name.replace(/ in shell$/, '');
+  return k.unit === 'ea' && !name.endsWith('s') ? name + 's' : name;
+}
 const hoursOf = (n) => (isFinite(n.total) ? n.total / 60 : Infinity);
 function firstTask(s, P, node, why) {
   for (const st of node.steps) { const t = taskForStep(s, P, st.key, why, st); if (t) return t; }
@@ -108,7 +115,7 @@ function foodChain(s, P, up) {
   if (m.at) {
     const info = travelInfo(s, m.at), n = meal / Math.max(m.v, 1);
     const collectH = n / Math.max(def.gather ? def.gather.rate * 0.6 : 1, 1e-3);
-    return { task: { key: 'go.' + m.at, name: `Walk to ${s.locs[m.at].name.toLowerCase()}`, cmd: { t: 'travel', to: m.at }, minutes: info.minutes, met: info.met, mode: 'travel', note: `${fmt(info.km)} km` },
+    return { task: { key: 'go.' + m.at, name: `Walk to ${s.locs[m.at].name.toLowerCase()}`, cmd: { t: 'travel', to: m.at }, minutes: info.minutes, met: info.met, mode: 'travel', why: `for ${thingOf(m.rid)}`, note: `${fmt(info.km)} km` },
       prepH: (2 * info.minutes) / 60 + collectH + prep };
   }
   if (m.method === 'collect') {
@@ -231,7 +238,12 @@ export function taskList(s, P, sel, up) {
   const ready = Object.keys(RECIPES).map((rid) => recipeTask(s, rid, '')).filter(Boolean).sort((a, b) => a.minutes - b.minutes);
   for (const t of ready) push(t);
   if (L.surveys < 3) push({ key: 'survey', name: 'Search this place', cmd: { t: 'survey' }, minutes: 45, met: 2.8, mode: 'act', note: 'may turn up more' });
-  for (const id in s.locs) if (id !== s.at) { const info = travelInfo(s, id); push({ key: 'go.' + id, name: `Walk to ${s.locs[id].name.toLowerCase()}`, cmd: { t: 'travel', to: id }, minutes: info.minutes, met: info.met, mode: 'travel', note: `${fmt(info.km)} km` }); }
+  for (const id in s.locs) if (id !== s.at) {
+    const info = travelInfo(s, id), there = s.locs[id];
+    // what is known there and not here: the reason anyone would walk over
+    const only = Object.keys(there.res).filter((r) => there.res[r].known && RESOURCES[r].gather && !(L.res[r] && L.res[r].known)).slice(0, 3).map(thingOf);
+    push({ key: 'go.' + id, name: `Walk to ${there.name.toLowerCase()}`, cmd: { t: 'travel', to: id }, minutes: info.minutes, met: info.met, mode: 'travel', why: only.length ? 'for ' + only.join(', ') : '', note: `${fmt(info.km)} km` });
+  }
   push({ key: 'explore', name: 'Explore 2 h', cmd: { t: 'explore', hours: 2, targets: [] }, minutes: 120, met: 3.5, mode: 'travel', note: 'somewhere new' });
   push(REST_TASK);
   push(SLEEP_TASK);

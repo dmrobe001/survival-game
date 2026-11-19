@@ -12,11 +12,11 @@ import { newGame, migrate, act, gatherStatus, recipeStatus, planInput, slotSpec,
 import { dist, bearing } from './world.js';
 import { makePlanner } from './plan.js';
 import { taskList, runway } from './advice.js';
-import { projectRows, SORTS, tagsOf, NEEDS } from './econ.js';
+import { projectRows, pickRows, SORTS, tagsOf, NEEDS } from './econ.js';
 
 const SAVE_KEY = 'foothold-save-v1';
 let S = null;
-const ui = { sort: 'horizon', ver: 0, theme: 'auto', overlay: null, menu: false, inv: false, vitals: false, collapsed: {}, projBack: [], tab: 'plan', sel: null, planFilter: 'all', edges: [], view: null, choices: {}, targets: {}, hours: 2, notice: '', busy: false, fast: false, confirmNew: false };
+const ui = { mode: 'short', sort: 'horizon', ver: 0, theme: 'auto', overlay: null, menu: false, inv: false, vitals: false, collapsed: {}, projBack: [], tab: 'plan', sel: null, planFilter: 'all', edges: [], view: null, choices: {}, targets: {}, hours: 2, notice: '', busy: false, fast: false, confirmNew: false };
 
 // ------------------------------------------------------------------ persistence
 // JSON cannot hold Infinity; water sources have infinite abundance.
@@ -27,7 +27,7 @@ function load() { try { const t = localStorage.getItem(SAVE_KEY); return t ? tha
 const randomSeed = () => Math.random().toString(36).slice(2, 8);
 
 // Light, dark, or follow the device. Remembered in this browser only.
-const THEME_KEY = 'foothold-theme', SORT_KEY = 'foothold-sort';
+const THEME_KEY = 'foothold-theme', SORT_KEY = 'foothold-sort', MODE_KEY = 'foothold-mode';
 function applyTheme() {
   const root = document.documentElement;
   if (ui.theme === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', ui.theme);
@@ -470,9 +470,10 @@ function selectedCard(P, sel, up) {
     ${uibtn('×', 'projClear', { cls: 'quiet small-btn' })}</div>${lines}</div>`;
 }
 
-function projectsPane(P, ec, sel) {
-  const up = ec.base;
-  const list = ec.rows.filter((r) => !sel || r.key !== sel.key).sort(SORTS[ui.sort]);
+function projectsPane(P, ec, sel, shown) {
+  // short: everything carrying on as it is now; long: averaged over the coming year
+  const long = ui.mode === 'long', up = Object.assign({}, ec.base, long ? {} : { U: ec.base.now.U, parts: ec.base.now.parts });
+  const list = shown.filter((r) => !sel || r.key !== sel.key).sort(SORTS[ui.sort]);
   const rows = list.map((r) => {
     const sub = tagsOf(r).concat(r.wait > 60 ? [`+${fmtTime(r.wait)} waiting`] : []).join(' · ');
     return `<li><button class="row proj ${r.ready ? 'ready' : ''} ${r.goal ? 'goal' : ''}" data-ui="proj:${r.key}"><span class="row-name">${r.goal ? '★ ' : ''}${esc(r.name)}${sub ? `<small>${esc(sub)}</small>` : ''}</span>`
@@ -480,11 +481,12 @@ function projectsPane(P, ec, sel) {
   }).join('') || '<li class="muted small">Nothing you know how to make would change this here.</li>';
   const col = (k, label) => `<button class="num ${ui.sort === k ? 'on' : ''}" data-ui="sort:${k}" title="sort by ${k}">${label}</button>`;
   // the parts of upkeep, for the curious: read-only, behind a tap
-  const yr = up.year, hard = yr ? yr.worst.U : up.U;
+  const yr = long ? up.year : null, hard = yr ? yr.worst.U : up.U;
   const yearLine = yr ? `<li>Averaged over the coming year; the hardest stretch takes ${hrs(hard)} h a day${hard > 24 ? ', more than a day holds: as things stand you will not get through it' : ''}.${yr.putByToday > 30 ? ` Putting by about ${Math.round(yr.putByToday)} kcal a day of ${yr.putRids.map((r) => resName(r)).join(' and ')} for leaner times.` : ''}</li>` : '';
   const parts = ui.upkeep ? `<ul class="upkeep-parts">${yearLine}${NEEDS.map((k) => `<li><b>${NEED_NAMES[k]} ${hrs(up.parts[k])} h</b> ${needLines(k, up).map(esc).join(' ')}</li>`).join('')}</ul>` : '';
   return `<section class="pane projects" aria-label="Projects">
-    <div class="upkeep"><button class="pane-h upkeep-h" data-ui="upkeep" aria-expanded="${!!ui.upkeep}"><span>Upkeep <b>${hrs(up.U)} h a day</b></span><small>${hard > 24 ? 'lean months out of reach' : isFinite(up.U) && up.U < 24 ? `${hrs(24 - up.U)} h free` : 'more than a day'} ${ui.upkeep ? '▴' : '▾'}</small></button>${parts}</div>
+    <div class="upkeep"><div class="upkeep-top"><button class="pane-h upkeep-h" data-ui="upkeep" aria-expanded="${!!ui.upkeep}"><span>Upkeep <b>${hrs(up.U)} h a day</b></span><small>${yr && hard > 24 ? "won't last the year" : isFinite(up.U) && up.U < 24 ? `${hrs(24 - up.U)} h free` : 'more than a day'} ${ui.upkeep ? '▴' : '▾'}</small></button>
+      <span class="seg" role="group" aria-label="Count savings">${uibtn('short', 'mode:short', { on: !long, cls: 'segb' })}${uibtn('long', 'mode:long', { on: long, cls: 'segb' })}</span></div>${parts}</div>
     ${sel ? selectedCard(P, sel, up) : ''}
     <div class="cols"><span>Project</span>${col('needs', 'needs h')}${col('saves', 'saves h/d')}${col('horizon', 'pays in')}</div>
     <ul class="rows" id="proj-list" data-keep-scroll>${rows}</ul></section>`;
@@ -615,14 +617,15 @@ function render() {
   }
   const { P, ec } = econNow();
   if (S.project && S.project.startsWith('need:')) S.project = null; // need buttons are gone
-  const sel = S.project ? ec.rows.find((r) => r.key === S.project) || null : null;
+  const shown = pickRows(ec.rows, ui.mode, S.project ? [S.project] : []);
+  const sel = S.project ? shown.find((r) => r.key === S.project) || null : null;
   if (S.project && !sel) S.project = null;
   const tasks = taskList(S, P, sel, ec.base);
   // pace the forecast on the first task that takes real time, not on a 3-minute drink
   const pace = tasks.find((x) => x.minutes >= 20) || tasks[0];
   const lines = runway(S, pace);
   app.innerHTML = `<div class="screen">${statusBar(lines, pace)}
-    ${ui.inv ? inventoryPane() : projectsPane(P, ec, sel) + tasksPane(tasks) + stashPane()}
+    ${ui.inv ? inventoryPane() : projectsPane(P, ec, sel, shown) + tasksPane(tasks) + stashPane()}
     ${handsBar()}</div>`;
   if (ui.resetProjScroll) { keep['proj-list'] = 0; keep['task-list'] = 0; ui.resetProjScroll = false; }
   for (const id in keep) { const el = document.getElementById(id); if (el) el.scrollTop = keep[id]; }
@@ -633,10 +636,9 @@ function render() {
 let econCache = null;
 function econNow() {
   const key = ui.ver + '|' + S.t + '|' + S.nextId + '|' + S.at + '|' + Object.keys(S.goals).join(',');
-  const pick = S.project && !S.project.startsWith('need:') ? S.project : null;
-  if (econCache && econCache.key === key && (!pick || econCache.ec.rows.some((r) => r.key === pick))) return econCache;
-  const P = econCache && econCache.key === key ? econCache.P : makePlanner(S);
-  return (econCache = { key, P, ec: projectRows(S, P, pick && P.has(pick) ? [pick] : []) });
+  if (econCache && econCache.key === key) return econCache;
+  const P = makePlanner(S);
+  return (econCache = { key, P, ec: projectRows(S, P) });
 }
 
 // ------------------------------------------------------------------ input
@@ -691,6 +693,7 @@ function uiAction(a, el) {
   else if (k === 'theme') { ui.theme = { auto: 'light', light: 'dark', dark: 'auto' }[ui.theme]; applyTheme(); }
   else if (k === 'vitals') ui.vitals = !ui.vitals;
   else if (k === 'upkeep') ui.upkeep = !ui.upkeep;
+  else if (k === 'mode') { ui.mode = v; try { localStorage.setItem(MODE_KEY, v); } catch (e) { /* not saved; fine */ } }
   else if (k === 'inv') ui.inv = !ui.inv;
   else if (k === 'collapse') ui.collapsed[v] = !ui.collapsed[v];
   else if (k === 'view') ui.view = v;
@@ -772,6 +775,7 @@ export function boot(saved) {
   setupDrag();
   try { const th = localStorage.getItem(THEME_KEY); if (th === 'light' || th === 'dark') ui.theme = th; } catch (e) { /* default */ }
   try { const so = localStorage.getItem(SORT_KEY); if (SORTS[so]) ui.sort = so; } catch (e) { /* default */ }
+  try { const mo = localStorage.getItem(MODE_KEY); if (mo === 'short' || mo === 'long') ui.mode = mo; } catch (e) { /* default */ }
   if (ui.theme !== 'auto') applyTheme();
   if (S) render(); else start();
   return () => freeze(S);

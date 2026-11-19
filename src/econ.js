@@ -834,33 +834,39 @@ export function projectRows(s, P, include = []) {
         const P2 = makePlanner(s, capsOfItems(gi.items));
         goalH(P2).forEach((h, i) => { if (isFinite(g0[i]) && isFinite(h)) oneoff += Math.max(0, g0[i] - h); });
       }
-      const by = {};
-      for (const k of NEEDS) by[k] = diff(base.parts[k], u.parts[k]);
-      ev = { u, oneoff, by, saves: diff(base.U, u.U), why: reasons(base, u) };
+      // two views: as things are now (short), and over the coming year (long)
+      const view = (b, a) => { const by = {}; for (const k of NEEDS) by[k] = diff(b.parts[k], a.parts[k]); return { by, saves: diff(b.U, a.U) }; };
+      ev = { u, oneoff, short: view(base.now, u.now), long: view(base, u), why: reasons(base, u) };
       cache.set(gi.sig, ev);
     }
     const needs = prog ? prog.proj.left : labor(n);
     const nh = needs / 60;
-    const horizon = ev.saves > 1e-6 ? Math.max(0, (nh - ev.oneoff) / ev.saves) : ev.oneoff >= nh - 1e-9 && ev.oneoff > 0 ? 0 : Infinity;
-    // a project that brings the hardest stretch of the year within a day's work matters more than its hours
-    const survive = base.year && base.year.worst.U > 24 && ev.u.year && ev.u.year.worst.U <= 24;
-    if (survive) note = 'gets you through the hardest stretch of the year' + (note ? '; ' + note : '');
-    rows.push({ key, rid, name: n.name, node: n, prog, goal, ready: n.ready || !!prog, needs, wait: prog ? 0 : waitOf(n), saves: ev.saves, by: ev.by, oneoff: ev.oneoff, horizon, gained, after: ev.u, why: ev.why, note, survive });
+    const horizon = (v) => (v.saves > 1e-6 ? Math.max(0, (nh - ev.oneoff) / v.saves) : ev.oneoff >= nh - 1e-9 && ev.oneoff > 0 ? 0 : Infinity);
+    rows.push({ key, rid, name: n.name, node: n, prog, goal, ready: n.ready || !!prog, needs, wait: prog ? 0 : waitOf(n), oneoff: ev.oneoff, gained, after: ev.u, why: ev.why, note,
+      short: Object.assign({ horizon: horizon(ev.short) }, ev.short), long: Object.assign({ horizon: horizon(ev.long) }, ev.long) });
   }
+  return { base, rows };
+}
+
+// The rows to show in one view ('short': as things are now; 'long': the
+// year), with that view's saves, breakdown and horizon. Projects that change
+// nothing are left out, as is any that only repeats a quicker one's gains
+// with extra steps. Keys in `include` are always kept.
+export function pickRows(all, mode, include = []) {
+  const rows = all.map((r) => Object.assign({}, r, r[mode]));
   const EPS = 0.05;
   const pinned = (r) => r.goal || r.prog || include.includes(r.key);
   let keep = rows.filter((r) => pinned(r) || r.saves > EPS || r.oneoff > EPS);
   const beats = (b, a) => b.needs <= a.needs + 1e-9 && subset(b.gained, a.gained) && a.saves <= b.saves + EPS && a.oneoff <= b.oneoff + EPS
     && (b.needs < a.needs - 1e-9 || !subset(a.gained, b.gained) || b.key < a.key);
   keep = keep.filter((a) => pinned(a) || !keep.some((b) => b !== a && beats(b, a)));
-  return { base, rows: keep };
+  return keep;
 }
 
-const lifeFirst = (a, b) => (b.survive ? 1 : 0) - (a.survive ? 1 : 0);
 export const SORTS = {
-  horizon: (a, b) => lifeFirst(a, b) || a.horizon - b.horizon || b.saves - a.saves || a.needs - b.needs,
-  needs: (a, b) => lifeFirst(a, b) || a.needs - b.needs || a.horizon - b.horizon,
-  saves: (a, b) => lifeFirst(a, b) || b.saves - a.saves || a.needs - b.needs,
+  horizon: (a, b) => a.horizon - b.horizon || b.saves - a.saves || a.needs - b.needs,
+  needs: (a, b) => a.needs - b.needs || a.horizon - b.horizon,
+  saves: (a, b) => b.saves - a.saves || a.needs - b.needs,
 };
 
 // The one or two needs a project helps (or costs) most, in words.

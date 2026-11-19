@@ -338,9 +338,13 @@ asked for more than 18 h a day of upkeep), solved exactly by a simplex in
 The plan is shown, not asked for: each meal's collecting takes the share
 being put by, and food that keeps gets a "store it" task.
 
-Projects are ranked on the year's average. One that brings the hardest
-season within a day's work is marked as getting you through it and ranked
-first, whatever its hours.
+Two views, switched by *short / long* next to the upkeep total: **short**
+counts everything carrying on as it is now (this season's upkeep);
+**long** averages the coming year (and will include averaged incident
+rates). Saves, the breakdown and pays-in follow the view.
+
+Every suggested walk says what it is for ("for water", "for berries");
+the purpose behind that is implied.
 
 ## Time
 

@@ -8,7 +8,7 @@ import { reach, here, best, label } from '../src/items.js';
 import { dayOf, hourOf } from '../src/sim.js';
 import { makePlanner } from '../src/plan.js';
 import { taskList } from '../src/advice.js';
-import { upkeep, projectRows, NEEDS } from '../src/econ.js';
+import { upkeep, projectRows, pickRows, NEEDS } from '../src/econ.js';
 import { tiersOf, passRate, tierKey } from '../src/tiers.js';
 import { typicalState } from '../tools/benchmarks.mjs';
 import { canMerge, capOf, mk, setPieces } from '../src/items.js';
@@ -54,7 +54,9 @@ check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'stat
   check(Math.abs(u.U - NEEDS.reduce((a, k) => a + u.parts[k], 0)) < 1e-9, 'upkeep must be the sum of its parts');
   check(u.sleep.S >= 4 && u.sleep.S <= 16, 'sleep hours out of range: ' + u.sleep.S);
   const P = makePlanner(s);
-  const { base, rows } = projectRows(s, P);
+  const { base, rows: all } = projectRows(s, P);
+  const rows = pickRows(all, 'short');
+  check(pickRows(all, 'long').every((r) => !isNaN(r.saves) && !isNaN(r.horizon)), 'long-view rows must have numbers');
   check(rows.length >= 5, 'expected several projects that cut upkeep, got ' + rows.length);
   check(rows.every((r) => !isNaN(r.saves) && !isNaN(r.horizon) && r.needs > 0), 'project rows must have numbers');
   check(rows.some((r) => r.by.sleep > 0.5), 'some project should cut sleep (a bed or shelter)');
@@ -62,7 +64,7 @@ check(JSON.stringify(JSON.parse(JSON.stringify(a))) === JSON.stringify(a), 'stat
   const bed = upkeep(s, ['bed']), raised = upkeep(s, ['raised_bed']);
   check(bed.parts.sleep < base.parts.sleep && raised.parts.sleep < bed.parts.sleep, 'better bedding should cut sleep in order');
   // nothing is free: a project's saving is never more than the whole upkeep
-  check(rows.every((r) => r.saves <= base.U + 1e-9), 'a project cannot save more than the upkeep');
+  check(rows.every((r) => r.saves <= base.now.U + 1e-9), 'a project cannot save more than the upkeep');
   for (const sel of [null, rows[0]]) taskList(s, P, sel, base);
   // determinism: evaluating upkeep must not touch the game state
   const before = JSON.stringify(s);
